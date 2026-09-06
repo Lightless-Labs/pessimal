@@ -19,13 +19,21 @@ UniFFI bridge.
 | Export is plain **OTLP**; backends differ only by auth header | Makes SigNoz / ClickStack / Honeycomb / anything-else a config choice, not a code path. |
 | Read-back needs a **per-backend adapter** | There is no OTLP for queries. SigNoz first (the owner's shared collector), then Honeycomb and ClickStack. |
 | Agents build with **Cargo**, not Bazel | Bazel here exists for the Apple toolchain. Linux and Windows agents cross-compile far more simply with Cargo in CI. |
+| Client crates pick their **own reqwest TLS features** | The agent inherits `aws-lc-rs` from reqwest's default rustls provider. Harmless server-side, but it is the usual cause of iOS cross-compilation trouble, and the two are separate build graphs so they need not agree. |
+| **MSRV 1.95** | Set by `sysinfo` 0.39, not by choice. Recorded because the Bazel Rust toolchain has to match it. |
 | Bazel pinned to **8.2.1** | rules_apple is not yet Bazel 9 compatible. Matches the toolchain proven in the sibling projects. |
 
 ## Milestones
 
 ### M0 — Scaffold and CI ✅
-Repo layout, Cargo workspace, licence, conventional commits, CI that builds and tests the Rust
-tree on Linux/macOS/Windows.
+Repo layout, Cargo workspace, licence, conventional commits. CI builds and tests the Rust tree on
+`ubuntu-latest`, `macos-15`, and `windows-latest`, lints once on Linux, and runs an OTLP export
+smoke test over both protocols against a real collector service container.
+
+PR CI runs on hosted runners only. Standard hosted runners are free and unmetered for public
+repositories, so this costs nothing, and it means a fork's pull request can never execute on the
+owner's machine. The self-hosted `getmac-tahoe` runner is reserved for pushes to `main` and for
+release workflows, which forks cannot trigger.
 
 ### M1 — Domain core ✅
 `pessimal_core`: metric identity mapped to OTel semconv names, time ranges and series, liveness

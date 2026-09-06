@@ -10,7 +10,8 @@ glance, and raise configurable alerts.
 > very shiny shoes, sent to audit the City Watch, whose forensic accounting later became "legendary
 > and feared throughout Ankh-Morpork". This is that, for your hosts.
 
-**Status: early.** The domain core and the agent are taking shape; the apps are not usable yet. See
+**Status: early.** The domain core and the host agent work and are tested end to end against a
+real OpenTelemetry collector. The query adapters and both apps are not written yet. See
 [`docs/plans/`](docs/plans/) for the roadmap.
 
 ## What it does
@@ -58,20 +59,30 @@ docs/            Plans, architecture notes, solution docs
 
 ## Building
 
-Rust pieces build with Cargo on all three platforms:
+Everything that exists today builds with Cargo, on Linux, macOS, and Windows:
 
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The Apple apps build with Bazel (macOS + Xcode 26 required):
+Run the agent against a throwaway collector to see what it exports:
 
 ```bash
-bazel build //...
-bazel test //...
-bazel run //:xcodeproj     # generate the Xcode project
+docker run --rm -p 4317:4317 -p 4318:4318 \
+  -v "$PWD/dev/otelcol:/etc/otelcol-conf" \
+  otel/opentelemetry-collector-contrib:latest --config /etc/otelcol-conf/config.yaml
+
+cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml
 ```
+
+Or just look at what it would send, without exporting anything:
+
+```bash
+cargo run -p pessimal_agent_host -- --config pessimal.example.toml --sample
+```
+
+The Apple apps will build with Bazel once they exist (M5 onward); there is no `MODULE.bazel` yet.
 
 ## Licence
 

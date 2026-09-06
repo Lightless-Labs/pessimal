@@ -51,10 +51,11 @@ Anything shared by *both* agents and clients belongs in `common/`, not in one si
 | Test Rust | `cargo test --workspace` |
 | Lint Rust | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Format | `cargo fmt --all` |
-| Build Apple | `bazel build //...` |
-| Test Apple | `bazel test //...` |
-| Regenerate FFI bindings | `./tools/uniffi/regen.sh` |
-| Generate Xcode project | `bazel run //:xcodeproj` |
+| Sample the host | `cargo run -p pessimal_agent_host -- --config pessimal.example.toml --sample` |
+| Verify OTLP export | `scripts/ci-export-smoke.sh grpc http://localhost:4317` |
+
+Bazel, `tools/uniffi/regen.sh`, and the Xcode project arrive with M4/M5. There is no `MODULE.bazel`
+yet — do not add build instructions for them to the docs before they work.
 
 ## Conventions
 
@@ -81,6 +82,12 @@ Anything shared by *both* agents and clients belongs in `common/`, not in one si
   `macos-15` (free and unmetered for public repos); the self-hosted `getmac-tahoe` runner is only
   used for pushes to `main` and for release workflows, which forks cannot trigger.
 - The bindgen CLI in `tools/uniffi/` and the `uniffi` runtime crate must stay on the same version.
-  A mismatch surfaces as an opaque API-checksum panic at app runtime, not at build time.
+  Both take it from `[workspace.dependencies]`; a mismatch surfaces as an opaque API-checksum panic
+  at app runtime, not at build time.
+- **MSRV is 1.95**, set by `sysinfo`. When the Bazel toolchain lands it must pin at least that, which
+  may mean a newer `rules_rust` than the 0.68.1 the sibling projects use.
+- The agent pulls `aws-lc-rs` transitively (reqwest's default rustls provider). That is fine for a
+  server-side binary but is the usual source of iOS cross-compilation pain, so the *client* crates
+  must choose their own reqwest TLS features rather than inheriting the agent's.
 - Regenerating bindings means copying **both** the `.swift` and the `FFI.h` file. Copying only one
   produces link errors that look unrelated.
