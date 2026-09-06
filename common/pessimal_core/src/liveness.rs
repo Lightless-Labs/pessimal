@@ -108,11 +108,17 @@ impl LivenessPolicy {
 }
 
 impl Default for LivenessPolicy {
-    /// A 30-second beat, stale at 2 missed intervals, down at 5.
+    /// A 30-second beat, stale at 3 missed intervals, down at 5.
+    ///
+    /// Three rather than two because a heartbeat's timestamp comes back quantised to the start of
+    /// the query bucket it fell in, so a perfectly healthy host's *measured* age can already be a
+    /// full interval older than its true age. At two intervals that lands exactly on the stale
+    /// threshold and the host flickers; three leaves an interval of headroom for the quantisation
+    /// plus poll latency.
     fn default() -> Self {
         Self {
             heartbeat_interval: Duration::seconds(30),
-            stale_after_intervals: 2,
+            stale_after_intervals: 3,
             down_after_intervals: 5,
         }
     }
@@ -191,9 +197,20 @@ mod tests {
     }
 
     #[test]
-    fn the_default_policy_is_valid() {
+    fn the_default_policy_leaves_headroom_for_bucket_quantisation() {
         let default = LivenessPolicy::default();
-        assert!(LivenessPolicy::new(default.heartbeat_interval(), 2, 5,).is_ok());
-        assert_eq!(default.stale_threshold(), Duration::seconds(60));
+        let interval = default.heartbeat_interval();
+
+        // Worst case for a healthy host: a full interval since its last beat, plus up to another
+        // full interval of quantisation from the query bucket that beat landed in.
+        let worst_case_measured_age = interval * 2;
+        assert!(
+            worst_case_measured_age < default.stale_threshold(),
+            "a healthy host would flicker stale"
+        );
+        assert_eq!(
+            default.evaluate(Some(at(0)), at(0) + worst_case_measured_age),
+            Liveness::Alive
+        );
     }
 }

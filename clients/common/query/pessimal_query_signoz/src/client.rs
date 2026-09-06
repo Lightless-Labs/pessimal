@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use pessimal_core::{
-    CoreError, Host, HostId, HostSelector, MetricKind, MetricPoint, MetricSeries, OsFamily, Result,
-    SeriesRequest, TelemetryQuery, TimeRange,
+    CoreError, Host, HostId, HostSelector, LivenessPolicy, MetricKind, MetricPoint, MetricSeries,
+    OsFamily, Result, SeriesRequest, TelemetryQuery, TimeRange,
 };
 use reqwest::{Client, StatusCode};
 
@@ -30,6 +30,12 @@ pub struct SignozConfig {
     pub api_key: String,
     /// Which naming convention this instance uses.
     pub naming: MetricNaming,
+    /// How often the agents beat.
+    ///
+    /// This is the step `list_hosts` queries at, and it has to be this fine. A bucket's timestamp
+    /// is the *start* of its bucket, so querying a 30-minute window in one bucket would report
+    /// every host's last heartbeat as 30 minutes old and mark the whole fleet down.
+    pub heartbeat_interval: Duration,
 }
 
 impl SignozConfig {
@@ -46,12 +52,22 @@ impl SignozConfig {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key: api_key.into(),
             naming: MetricNaming::default(),
+            // Taken from the domain's own default so the two cannot drift apart.
+            heartbeat_interval: LivenessPolicy::default().heartbeat_interval(),
         })
     }
 
     #[must_use]
     pub fn with_naming(mut self, naming: MetricNaming) -> Self {
         self.naming = naming;
+        self
+    }
+
+    /// Overrides the assumed heartbeat interval. Must match what the agents are configured with,
+    /// or liveness will be measured against the wrong yardstick.
+    #[must_use]
+    pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = interval;
         self
     }
 
@@ -72,9 +88,14 @@ impl SignozQuery {
     /// # Errors
     /// Returns [`CoreError::Backend`] if the HTTP client cannot be built.
     pub fn new(config: SignozConfig) -> Result<Self> {
-        let http = Client::builder().build().map_err(|error| {
-            CoreError::Backend(format!("could not build an HTTP client: {error}"))
-        })?;
+        // Explicit, because `cargo test --workspace` unifies features and would otherwise
+        // leave rustls enabled here, testing a different TLS stack than the one iOS ships.
+        let http = Client::builder()
+            .use_native_tls()
+            .build()
+            .map_err(|error| {
+                CoreError::Backend(format!("could not build an HTTP client: {error}"))
+            })?;
         Ok(Self { config, http })
     }
 
@@ -216,8 +237,10 @@ impl TelemetryQuery for SignozQuery {
             BuilderSpec {
                 name: "A",
                 signal: "metrics",
-                // A coarse step: only the newest timestamp per host matters here.
-                step_interval: range.duration().num_seconds().clamp(60, 3600),
+                // The heartbeat interval, not the window length. A bucket is timestamped at
+                // its start, so a coarse step would age every host by up to a full bucket and
+                // report a healthy fleet as down.
+                step_interval: self.config.heartbeat_interval.num_seconds().max(1),
                 aggregations: vec![Aggregation {
                     metric_name: naming.metric_name(MetricKind::AgentHeartbeat),
                     temporality: "Unspecified",

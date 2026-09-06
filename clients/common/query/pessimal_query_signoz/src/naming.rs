@@ -79,13 +79,18 @@ pub fn extra_dimensions(kind: MetricKind) -> &'static [&'static str] {
 
 /// How to aggregate a metric over time and across series.
 ///
-/// A gauge is averaged: it is a level, and the mean over a step is the honest summary. A counter
-/// is read at its latest value, because it is a running total and averaging one is meaningless.
+/// A gauge is averaged: it is a level, and the mean over a step is the honest summary.
+///
+/// A counter takes `max`, which for a monotonically increasing total is the same as its latest
+/// value in the bucket — and `max` is accepted for every metric type, where `latest` on a
+/// cumulative sum is not something we have confirmed SigNoz allows. That matters more than it
+/// looks: `check_connection` queries the heartbeat, so a rejected aggregation would fail the "test
+/// connection" button on a perfectly good connection.
 #[must_use]
 pub fn aggregation_for(kind: MetricKind) -> (&'static str, &'static str) {
     match kind.instrument_kind() {
         InstrumentKind::Gauge => ("avg", "avg"),
-        InstrumentKind::Counter => ("latest", "max"),
+        InstrumentKind::Counter => ("max", "max"),
     }
 }
 
@@ -163,12 +168,24 @@ mod tests {
     }
 
     #[test]
-    fn counters_are_read_at_their_latest_value_and_gauges_are_averaged() {
+    fn counters_take_their_maximum_and_gauges_are_averaged() {
         assert_eq!(aggregation_for(MetricKind::CpuUtilization), ("avg", "avg"));
-        assert_eq!(aggregation_for(MetricKind::NetworkIo), ("latest", "max"));
-        assert_eq!(
-            aggregation_for(MetricKind::AgentHeartbeat),
-            ("latest", "max")
-        );
+        assert_eq!(aggregation_for(MetricKind::NetworkIo), ("max", "max"));
+        assert_eq!(aggregation_for(MetricKind::AgentHeartbeat), ("max", "max"));
+    }
+
+    #[test]
+    fn no_metric_uses_an_aggregation_signoz_might_reject_on_a_cumulative_sum() {
+        for kind in MetricKind::ALL {
+            let (time, space) = aggregation_for(kind);
+            assert!(
+                ["avg", "max", "min", "sum", "count"].contains(&time),
+                "{kind} uses time aggregation {time}"
+            );
+            assert!(
+                ["avg", "max", "min", "sum", "count"].contains(&space),
+                "{kind} uses space aggregation {space}"
+            );
+        }
     }
 }

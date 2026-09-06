@@ -413,6 +413,55 @@ async fn lists_hosts_with_their_os_version_and_newest_heartbeat() {
 }
 
 #[tokio::test]
+async fn lists_hosts_at_the_heartbeat_interval_not_the_window_length() {
+    let server = MockServer::start().await;
+    mount(&server, &response(&[])).await;
+
+    adapter(&server).list_hosts(range()).await.expect("lists");
+
+    // A bucket is timestamped at its start. Querying a 30-minute window in one bucket would put
+    // every host's last heartbeat 30 minutes in the past and mark the entire fleet down.
+    let body = sent_body(&server).await;
+    assert_eq!(
+        spec(&body)["stepInterval"],
+        30,
+        "the step must be the heartbeat interval, not the window"
+    );
+}
+
+#[tokio::test]
+async fn an_overridden_heartbeat_interval_is_the_step_that_gets_sent() {
+    let server = MockServer::start().await;
+    mount(&server, &response(&[])).await;
+
+    let adapter = SignozQuery::new(
+        SignozConfig::new(server.uri(), API_KEY)
+            .expect("valid")
+            .with_heartbeat_interval(Duration::seconds(10)),
+    )
+    .expect("client builds");
+    adapter.list_hosts(range()).await.expect("lists");
+
+    assert_eq!(spec(&sent_body(&server).await)["stepInterval"], 10);
+}
+
+#[tokio::test]
+async fn a_heartbeat_query_uses_an_aggregation_valid_for_a_cumulative_sum() {
+    let server = MockServer::start().await;
+    mount(&server, &response(&[])).await;
+
+    adapter(&server)
+        .check_connection()
+        .await
+        .expect("connected");
+
+    let body = sent_body(&server).await;
+    let aggregation = &spec(&body)["aggregations"][0];
+    assert_eq!(aggregation["timeAggregation"], "max");
+    assert_eq!(aggregation["spaceAggregation"], "max");
+}
+
+#[tokio::test]
 async fn a_partial_bucket_does_not_make_a_stale_host_look_alive() {
     let server = MockServer::start().await;
     mount(

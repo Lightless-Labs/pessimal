@@ -12,7 +12,7 @@
   resource identity, OTLP export) and `pessimal_agent_host` (sysinfo collector, CLI, run loop).
   Verified end to end against a real OpenTelemetry collector over **both** gRPC and HTTP/protobuf:
   12 metrics arrive with the right names, units, and instrument types.
-- 152 tests, `clippy -D warnings` clean, `cargo fmt --check` clean.
+- 156 tests, `clippy -D warnings` clean, `cargo fmt --check` clean.
 - **M3 SigNoz adapter** — `pessimal_query_signoz` implements `TelemetryQuery` against
   `/api/v5/query_range`. Response types taken from SigNoz's own Go source, not guessed; the naming
   convention (dotted for v0.88+/Cloud, underscored before) is a setting. 37 tests including
@@ -47,6 +47,11 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
   *blocking* reqwest client, which will not run inside a runtime context. So the agent constructs
   the provider under a short-lived `runtime.enter()` guard and runs `shutdown()` outside any
   runtime context.
+- **A coarse query step destroys liveness.** SigNoz timestamps a bucket at its *start*, so
+  querying a 30-minute window in one bucket reports every host's last heartbeat as 30 minutes old
+  and marks a healthy fleet down. `list_hosts` queries at the heartbeat interval for that reason,
+  and `LivenessPolicy`'s default stale threshold is 3 intervals rather than 2 to leave headroom for
+  the quantisation that remains.
 - **SigNoz does not document its query response body.** Take it from
   `pkg/types/querybuildertypes/querybuildertypesv5/resp.go` in their repo. Three details a guess
   gets wrong: `labels[].key` is an object (name at `.key.name`), `value` arrives as the *string*
