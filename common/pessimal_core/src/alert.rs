@@ -197,13 +197,23 @@ impl AlertEvaluation {
 
     /// Folds one poll's worth of data into the state and returns the new state.
     ///
-    /// `series` is the data fetched for this rule's metric and host; `now` is the evaluation
-    /// instant. A disabled rule resets to [`AlertState::Ok`] so it cannot linger as firing.
+    /// `series` is the data fetched for this rule's metric and host and `now` is the evaluation
+    /// instant. `max_staleness` is how old the newest sample may be before it stops counting as
+    /// evidence: past that, the rule reports [`AlertState::NoData`] rather than judging the host
+    /// on a reading that has stopped being refreshed.
+    ///
+    /// That bound is not optional. Polling returns whatever the backend still holds, so an agent
+    /// that dies mid-breach would otherwise leave its last breaching sample in every subsequent
+    /// response — and the rule would dutifully fire, and keep firing, on a host nobody has heard
+    /// from since. A silent host is [`crate::Liveness`]'s business to report, not an alert's.
+    ///
+    /// A disabled rule resets to [`AlertState::Ok`] so it cannot linger as firing.
     pub fn observe(
         &mut self,
         rule: &AlertRule,
         series: &MetricSeries,
         now: DateTime<Utc>,
+        max_staleness: Duration,
     ) -> AlertState {
         if !rule.enabled || !rule.selector.matches(&self.host) {
             self.state = AlertState::Ok;
@@ -214,6 +224,11 @@ impl AlertEvaluation {
             self.state = AlertState::NoData;
             return self.state;
         };
+
+        if now - point.at > max_staleness {
+            self.state = AlertState::NoData;
+            return self.state;
+        }
 
         self.state = if rule.breaches(point.value) {
             // A breach already under way keeps its original start, so dwell accumulates across
@@ -262,6 +277,11 @@ mod tests {
 
     fn evaluation(rule: &AlertRule) -> AlertEvaluation {
         AlertEvaluation::new(rule.id().clone(), host())
+    }
+
+    /// A staleness bound wide enough that only the tests about staleness feel it.
+    fn fresh() -> Duration {
+        Duration::days(1)
     }
 
     #[test]
@@ -329,7 +349,7 @@ mod tests {
         let rule = rule(0);
         let mut eval = evaluation(&rule);
         assert_eq!(
-            eval.observe(&rule, &series(vec![]), at(0)),
+            eval.observe(&rule, &series(vec![]), at(0), fresh()),
             AlertState::NoData
         );
     }
@@ -338,7 +358,12 @@ mod tests {
     fn a_zero_dwell_rule_fires_on_the_first_breach() {
         let rule = rule(0);
         let mut eval = evaluation(&rule);
-        let state = eval.observe(&rule, &series(vec![MetricPoint::new(at(0), 0.95)]), at(0));
+        let state = eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(0),
+            fresh(),
+        );
         assert_eq!(state, AlertState::Firing { since: at(0) });
     }
 
@@ -349,15 +374,15 @@ mod tests {
 
         let data = series(vec![MetricPoint::new(at(0), 0.95)]);
         assert_eq!(
-            eval.observe(&rule, &data, at(0)),
+            eval.observe(&rule, &data, at(0), fresh()),
             AlertState::Pending { since: at(0) }
         );
         assert_eq!(
-            eval.observe(&rule, &data, at(60)),
+            eval.observe(&rule, &data, at(60), fresh()),
             AlertState::Pending { since: at(0) }
         );
         assert_eq!(
-            eval.observe(&rule, &data, at(120)),
+            eval.observe(&rule, &data, at(120), fresh()),
             AlertState::Firing { since: at(0) }
         );
     }
@@ -367,12 +392,18 @@ mod tests {
         let rule = rule(120);
         let mut eval = evaluation(&rule);
 
-        eval.observe(&rule, &series(vec![MetricPoint::new(at(0), 0.95)]), at(0));
+        eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(0),
+            fresh(),
+        );
         // A newer breaching sample arrives; the breach start must stay at the original point.
         let state = eval.observe(
             &rule,
             &series(vec![MetricPoint::new(at(130), 0.99)]),
             at(130),
+            fresh(),
         );
         assert_eq!(state, AlertState::Firing { since: at(0) });
     }
@@ -382,9 +413,19 @@ mod tests {
         let rule = rule(120);
         let mut eval = evaluation(&rule);
 
-        eval.observe(&rule, &series(vec![MetricPoint::new(at(0), 0.95)]), at(0));
+        eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(0),
+            fresh(),
+        );
         assert_eq!(
-            eval.observe(&rule, &series(vec![MetricPoint::new(at(60), 0.1)]), at(60)),
+            eval.observe(
+                &rule,
+                &series(vec![MetricPoint::new(at(60), 0.1)]),
+                at(60),
+                fresh()
+            ),
             AlertState::Ok
         );
 
@@ -392,6 +433,7 @@ mod tests {
             &rule,
             &series(vec![MetricPoint::new(at(120), 0.95)]),
             at(120),
+            fresh(),
         );
         assert_eq!(
             state,
@@ -404,7 +446,12 @@ mod tests {
     fn a_disabled_rule_never_fires_and_clears_an_existing_breach() {
         let rule = rule(0);
         let mut eval = evaluation(&rule);
-        eval.observe(&rule, &series(vec![MetricPoint::new(at(0), 0.95)]), at(0));
+        eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(0),
+            fresh(),
+        );
         assert!(eval.state().is_firing());
 
         let disabled = rule.disabled();
@@ -412,7 +459,8 @@ mod tests {
             eval.observe(
                 &disabled,
                 &series(vec![MetricPoint::new(at(0), 0.95)]),
-                at(0)
+                at(0),
+                fresh()
             ),
             AlertState::Ok
         );
@@ -423,7 +471,12 @@ mod tests {
         let rule = rule(0).with_selector(HostSelector::Host(HostId::new("db-1")));
         let mut eval = evaluation(&rule);
         assert_eq!(
-            eval.observe(&rule, &series(vec![MetricPoint::new(at(0), 0.95)]), at(0)),
+            eval.observe(
+                &rule,
+                &series(vec![MetricPoint::new(at(0), 0.95)]),
+                at(0),
+                fresh()
+            ),
             AlertState::Ok
         );
     }
@@ -433,7 +486,74 @@ mod tests {
         let rule = rule(0);
         let mut eval = evaluation(&rule);
         let data = series(vec![MetricPoint::new(at(300), 0.99)]);
-        assert_eq!(eval.observe(&rule, &data, at(0)), AlertState::NoData);
+        assert_eq!(
+            eval.observe(&rule, &data, at(0), fresh()),
+            AlertState::NoData
+        );
+    }
+
+    #[test]
+    fn a_sample_older_than_the_staleness_bound_is_no_data_not_a_breach() {
+        let rule = rule(0);
+        let mut eval = evaluation(&rule);
+        let data = series(vec![MetricPoint::new(at(0), 0.95)]);
+
+        assert_eq!(
+            eval.observe(&rule, &data, at(0), Duration::seconds(150)),
+            AlertState::Firing { since: at(0) }
+        );
+        // The agent goes quiet. The backend keeps returning that same last sample.
+        assert_eq!(
+            eval.observe(&rule, &data, at(600), Duration::seconds(150)),
+            AlertState::NoData,
+            "a rule must not keep firing on a host nobody has heard from"
+        );
+    }
+
+    #[test]
+    fn the_staleness_bound_is_inclusive() {
+        let rule = rule(0);
+        let mut eval = evaluation(&rule);
+        let data = series(vec![MetricPoint::new(at(0), 0.95)]);
+
+        assert!(
+            eval.observe(&rule, &data, at(150), Duration::seconds(150))
+                .is_firing()
+        );
+        assert_eq!(
+            eval.observe(&rule, &data, at(151), Duration::seconds(150)),
+            AlertState::NoData
+        );
+    }
+
+    #[test]
+    fn a_stale_sample_clears_the_dwell_so_recovery_starts_over() {
+        let rule = rule(120);
+        let mut eval = evaluation(&rule);
+        let bound = Duration::seconds(150);
+
+        eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(0),
+            bound,
+        );
+        eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(0), 0.95)]),
+            at(600),
+            bound,
+        );
+        assert_eq!(eval.state(), AlertState::NoData);
+
+        // The agent comes back, still hot. The dwell must restart, not resume from at(0).
+        let state = eval.observe(
+            &rule,
+            &series(vec![MetricPoint::new(at(600), 0.95)]),
+            at(600),
+            bound,
+        );
+        assert_eq!(state, AlertState::Pending { since: at(600) });
     }
 
     #[test]
