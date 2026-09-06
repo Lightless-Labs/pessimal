@@ -1,9 +1,30 @@
 [package]
 name = "pessimal_query_signoz"
+description = "SigNoz implementation of the Pessimal telemetry query port."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pessimal_core = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# native-tls, not rustls. The clients are Apple-only, so this uses Security.framework: no
+# aws-lc-rs to cross-compile for iOS, and it trusts the system store, which is what a self-hosted
+# SigNoz behind an internal CA needs. The agent's own reqwest features are irrelevant here — the
+# two are separate build graphs.
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

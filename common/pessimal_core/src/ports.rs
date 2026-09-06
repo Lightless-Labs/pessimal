@@ -1,7 +1,7 @@
 //! Ports the domain requires of the outside world.
 //!
 //! Adapters implement these; the domain never names an adapter. Every method returns
-//! [`crate::CoreError`] so a `SigNoz` failure and a Honeycomb failure are the same shape to
+//! [`crate::CoreError`] so a SigNoz failure and a Honeycomb failure are the same shape to
 //! everything above.
 
 use async_trait::async_trait;
@@ -41,7 +41,7 @@ impl SeriesRequest {
     }
 }
 
-/// Read-side port over a telemetry backend — `SigNoz`, `ClickStack`, Honeycomb, anything that can
+/// Read-side port over a telemetry backend — SigNoz, ClickStack, Honeycomb, anything that can
 /// answer "this metric, these hosts, this window".
 ///
 /// Polling only: there is no subscription method, by design. Push arrives as a separate port when

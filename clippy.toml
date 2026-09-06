@@ -1,0 +1,16 @@
+# Proper nouns that appear in doc comments. Without these, clippy::doc_markdown asks for backticks
+# around every product name, which turns readable prose into `SigNoz` and `OpenTelemetry` soup.
+# ".." keeps clippy's own default list as well.
+doc-valid-idents = [
+    "SigNoz",
+    "ClickStack",
+    "HyperDX",
+    "Honeycomb",
+    "OTel",
+    "OTLP",
+    "OpenTelemetry",
+    "UniFFI",
+    "UUIDv7",
+    "MenuBarExtra",
+    "..",
+]

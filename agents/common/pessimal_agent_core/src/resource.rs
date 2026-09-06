@@ -70,7 +70,7 @@ impl AgentIdentity {
         self
     }
 
-    /// The attributes as `OTel` key-values, operator extras last so they cannot silently shadow a
+    /// The attributes as OTel key-values, operator extras last so they cannot silently shadow a
     /// semantic-convention attribute Pessimal depends on.
     #[must_use]
     pub fn attributes(&self) -> Vec<KeyValue> {
@@ -109,7 +109,7 @@ impl AgentIdentity {
         attributes
     }
 
-    /// The `OTel` [`Resource`] for the meter provider.
+    /// The OTel [`Resource`] for the meter provider.
     #[must_use]
     pub fn resource(&self) -> Resource {
         Resource::builder_empty()

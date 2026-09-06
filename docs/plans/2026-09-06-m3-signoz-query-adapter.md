@@ -1,7 +1,8 @@
 # M3 — SigNoz query adapter
 
 **Created:** 2026-09-06
-**Status:** Blocked on a real SigNoz to read from
+**Status:** Built and tested at the HTTP level. Not yet run against a live instance.
+**Updated:** 2026-09-06
 
 ## Goal
 
@@ -58,11 +59,47 @@ The request contract is documented and unambiguous.
   query key, so the adapter needs a naming strategy rather than passing the semconv name straight
   through.
 
-## What is not established
+## The response shape, and how it was obtained
 
-**The response body shape is not in the documentation.** Field names for series, labels, points, and
-timestamps are unknown, and that is precisely the part a parser is made of. Building it from
-recall would encode guesses as fixtures and the tests would then defend the guesses.
+The prose documentation does not publish the response body. Rather than guess it — or spend five
+containers and several gigabytes standing up a local SigNoz to observe it — it was taken from
+SigNoz's own Go types, which are authoritative:
+`pkg/types/querybuildertypes/querybuildertypesv5/resp.go`.
+
+```
+QueryRangeResponse
+  data.results[]            -> TimeSeriesData
+    queryName
+    aggregations[]          -> AggregationBucket
+      index, alias, meta.unit
+      series[]              -> TimeSeries
+        labels[]            -> {key: {name, signal, fieldContext, fieldDataType}, value: any}
+        values[]            -> {timestamp: int64 ms, value: float64, partial: bool}
+```
+
+Three things there that a reasonable guess gets wrong:
+
+1. **`labels[].key` is an object, not a string.** The name is at `labels[].key.name`.
+2. **`value` is not reliably a number.** It is declared `float64` in Go, but every value passes
+   through a sanitiser that renders non-finite numbers as the *strings* `"NaN"`, `"Inf"`, `"-Inf"`.
+   Deserialising straight into `f64` fails exactly when a host has a gap in its data — which is
+   when a monitoring client most needs to keep working.
+3. **`partial` datapoints must be dropped.** SigNoz's own comment says a partial bucket does not
+   cover its whole step and "should be ignored". The first bucket of any window usually is one.
+   Charting them puts a false dip at the edge of every window; worse, letting one through in
+   `list_hosts` reports a heartbeat later than the one actually recorded, which makes a stale host
+   look alive.
+
+Aggregation and temporality enum values come from `pkg/types/metrictypes/metrictypes.go`:
+`latest | sum | avg | min | max | count | count_distinct | rate | increase` for time, and
+`sum | avg | min | max | count` for space.
+
+## What is still unverified
+
+The adapter has never spoken to a real SigNoz. The *structure* is authoritative, but the
+*behaviour* is not: which labels are actually populated, how an unknown metric name is reported,
+and whether Cloud differs from self-hosted in any of it. One `query_range` call against the owner's
+Cloud instance would settle all three.
 
 ## Decisions taken
 
@@ -72,14 +109,14 @@ recall would encode guesses as fixtures and the tests would then defend the gues
 | Fixtures come from a real instance | Wiremock fixtures written from recall test the fiction, not the backend. |
 | The adapter picks its own reqwest TLS features | The agent inherits `aws-lc-rs` from reqwest's default rustls provider. The clients must not: it is the usual source of iOS cross-compilation trouble, and the two are separate build graphs. |
 
+## Why not a local SigNoz
+
+The plan was to stand one up and capture real responses. On inspection that costs five containers
+(ClickHouse, ClickHouse Keeper, Postgres, the collector, and SigNoz itself), 4GB of RAM, a
+piped-shell `foundryctl` install, and UI-driven account creation — all to learn a schema that the
+source code states outright. The source was the better answer, and cheaper by several gigabytes on
+a machine with 44GB free.
+
 ## Next step
 
-Get real `query_range` responses. In preference order:
-
-1. **Stand up SigNoz locally in Docker**, point the agent at it, and capture genuine responses for
-   the metrics Pessimal actually emits. No credentials involved, reproducible, and the same compose
-   file can later back an integration test.
-2. A read-only service-account key for the owner's existing instance.
-3. The owner runs one `curl` and pastes the response.
-
-Option 1 is the default unless the owner says otherwise.
+Confirm against the owner's SigNoz Cloud instance with a single request. Everything else is done.

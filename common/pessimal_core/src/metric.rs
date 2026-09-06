@@ -1,7 +1,7 @@
 //! Metric identity, units, and time series.
 //!
 //! Metric names follow the OpenTelemetry system semantic conventions so that whatever backend
-//! ingests the agent's OTLP — `SigNoz`, `ClickStack`, Honeycomb, a bare collector — stores them under
+//! ingests the agent's OTLP — SigNoz, ClickStack, Honeycomb, a bare collector — stores them under
 //! names it already understands. [`MetricKind`] is the closed set Pessimal charts and alerts on;
 //! anything else in the backend is still exported, just not modelled here.
 
@@ -19,7 +19,7 @@ pub const PESSIMAL_METRIC_NAMESPACE: &str = "pessimal.agent";
 
 /// Whether a metric's values stand alone or accumulate.
 ///
-/// This decides which `OTel` instrument the agent registers, and how a backend should be asked to
+/// This decides which OTel instrument the agent registers, and how a backend should be asked to
 /// aggregate the metric on read. Getting it wrong is not cosmetic: a cumulative value charted as
 /// a gauge is a line that only ever goes up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -115,7 +115,7 @@ impl MetricKind {
         }
     }
 
-    /// Which `OTel` instrument this metric is exported as.
+    /// Which OTel instrument this metric is exported as.
     #[must_use]
     pub fn instrument_kind(self) -> InstrumentKind {
         match self {
@@ -158,7 +158,7 @@ impl MetricKind {
         }
     }
 
-    /// Resolves an `OTel` instrument name back to a modelled metric.
+    /// Resolves an OTel instrument name back to a modelled metric.
     ///
     /// # Errors
     /// Returns [`CoreError::UnknownMetric`] for a name Pessimal does not model.

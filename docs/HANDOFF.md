@@ -12,8 +12,14 @@
   resource identity, OTLP export) and `pessimal_agent_host` (sysinfo collector, CLI, run loop).
   Verified end to end against a real OpenTelemetry collector over **both** gRPC and HTTP/protobuf:
   12 metrics arrive with the right names, units, and instrument types.
-- 107 tests, `clippy -D warnings` clean, `cargo fmt --check` clean.
-- M3 onwards unstarted; `clients/` holds placeholder crates so the workspace parses.
+- 152 tests, `clippy -D warnings` clean, `cargo fmt --check` clean.
+- **M3 SigNoz adapter** — `pessimal_query_signoz` implements `TelemetryQuery` against
+  `/api/v5/query_range`. Response types taken from SigNoz's own Go source, not guessed; the naming
+  convention (dotted for v0.88+/Cloud, underscored before) is a setting. 37 tests including
+  HTTP-level ones against a mock server. **Never run against a live SigNoz** — structure is
+  authoritative, behaviour is not.
+- `pessimal_client_core` and everything from M4 on are unstarted; `clients/` still holds
+  placeholders for them.
 
 ## Verifying the agent locally
 
@@ -41,11 +47,16 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
   *blocking* reqwest client, which will not run inside a runtime context. So the agent constructs
   the provider under a short-lived `runtime.enter()` guard and runs `shutdown()` outside any
   runtime context.
+- **SigNoz does not document its query response body.** Take it from
+  `pkg/types/querybuildertypes/querybuildertypesv5/resp.go` in their repo. Three details a guess
+  gets wrong: `labels[].key` is an object (name at `.key.name`), `value` arrives as the *string*
+  `"NaN"`/`"Inf"`/`"-Inf"` for non-finite numbers despite being typed `float64`, and `partial`
+  buckets must be dropped or a stale host reads as alive.
 - **Do not trust `docker logs` after `docker restart`** when verifying an export: the previous
   run's lines are still there and will happily convince you a broken path works. Recreate the
   container.
 
 ## Next up
 
-M3: `pessimal_query_signoz` implementing `TelemetryQuery` against SigNoz's query-range API, then
-`pessimal_client_core` orchestrating polling, liveness, and alert evaluation across a fleet.
+Confirm the SigNoz adapter against a live instance with one `query_range` call, then
+`pessimal_client_core`: polling orchestration, liveness, and alert evaluation across a fleet.

@@ -90,9 +90,9 @@ pub enum BackendPreset {
     /// A bare OTLP endpoint. No headers are added; supply your own if the endpoint needs them.
     #[default]
     Otlp,
-    /// `SigNoz`, self-hosted or cloud. Cloud requires an access token; self-hosted does not.
+    /// SigNoz, self-hosted or cloud. Cloud requires an access token; self-hosted does not.
     Signoz,
-    /// `ClickStack` / `HyperDX`. Requires an ingestion key.
+    /// ClickStack / HyperDX. Requires an ingestion key.
     Clickstack,
     /// Honeycomb. Requires an API key, and — for metrics specifically — a dataset.
     Honeycomb,

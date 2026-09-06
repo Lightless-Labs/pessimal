@@ -28,3 +28,6 @@ credentials/
 # Logs
 *.log
 nohup.out
+
+# Local SigNoz used only for capturing real query responses
+/dev/signoz/

@@ -30,7 +30,7 @@ pub struct Urn {
 }
 
 impl Urn {
-    /// Builds a URN with the default prefix and a freshly minted `UUIDv7`.
+    /// Builds a URN with the default prefix and a freshly minted UUIDv7.
     ///
     /// # Errors
     /// Returns [`CoreError::InvalidUrn`] if any segment is empty or contains the `::` separator.
