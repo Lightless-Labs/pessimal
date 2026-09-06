@@ -1,4 +1,4 @@
-//! UniFFI bindgen CLI entry point.
+//! `UniFFI` bindgen CLI entry point.
 //!
 //! Exists so the bindgen binary and the `uniffi` runtime crate are the same version. A mismatch
 //! produces bindings whose API checksums disagree with the compiled library, which surfaces much
