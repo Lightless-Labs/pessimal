@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Bazel
+/bazel-*
+/.bazel/
+/.build/
+
+# Xcode / generated products
+/products/
+*.xcuserdatad
+*.xcuserstate
+DerivedData/
+
+# UniFFI scratch output
+/.uniffi-out/
+
+# macOS
+.DS_Store
+
+# Local config & secrets
+/.env
+*.local.toml
+.bazelrc.local
+credentials/
+
+# Logs
+*.log
+nohup.out

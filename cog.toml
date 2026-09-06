@@ -1,0 +1,20 @@
+tag_prefix = "v"
+branch_whitelist = ["main"]
+ignore_merge_commits = true
+
+pre_bump_hooks = []
+post_bump_hooks = []
+
+[changelog]
+path = "CHANGELOG.md"
+authors = []
+
+[commit_types]
+feat = { changelog_title = "Features" }
+fix = { changelog_title = "Bug Fixes" }
+docs = { changelog_title = "Documentation" }
+refactor = { changelog_title = "Refactoring" }
+test = { changelog_title = "Tests" }
+chore = { changelog_title = "Chores" }
+perf = { changelog_title = "Performance" }
+ci = { changelog_title = "CI/CD" }
