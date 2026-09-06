@@ -1,9 +1,28 @@
 [package]
 name = "pessimal_agent_host"
+description = "The Pessimal host telemetry agent: samples CPU, memory, filesystem, network, and load, and exports OTLP."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "pessimal-agent"
+path = "src/main.rs"
+
+[dependencies]
+pessimal_agent_core = { workspace = true }
+pessimal_core = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+hostname = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+sysinfo = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

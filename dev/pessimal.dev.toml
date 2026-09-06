@@ -1,0 +1,14 @@
+# Points at the local dev collector in dev/otelcol. See that file for how to start it.
+[export]
+preset = "otlp"
+endpoint = "http://localhost:4317"
+protocol = "grpc"
+interval_seconds = 5
+timeout_seconds = 3
+
+[resource]
+service_name = "pessimal-agent"
+environment = "dev"
+
+[collection]
+filesystems = ["/"]

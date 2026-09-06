@@ -17,6 +17,19 @@ use crate::host::HostId;
 /// Metric namespace for Pessimal's own instrumentation, as opposed to `system.*` semconv metrics.
 pub const PESSIMAL_METRIC_NAMESPACE: &str = "pessimal.agent";
 
+/// Whether a metric's values stand alone or accumulate.
+///
+/// This decides which `OTel` instrument the agent registers, and how a backend should be asked to
+/// aggregate the metric on read. Getting it wrong is not cosmetic: a cumulative value charted as
+/// a gauge is a line that only ever goes up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InstrumentKind {
+    /// A value that is meaningful on its own, e.g. current CPU utilisation.
+    Gauge,
+    /// A monotonically increasing total since the process or host started, e.g. bytes sent.
+    Counter,
+}
+
 /// The unit a metric's values carry. Formatting is the UI's business; this only says what a
 /// number means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,11 +74,14 @@ pub enum MetricKind {
     SystemUptime,
     /// Pessimal's own liveness beat. Its most recent timestamp is what [`crate::Liveness`] reads.
     AgentHeartbeat,
+    /// Cumulative host-sampling failures. An agent can be beating happily while collecting
+    /// nothing — a permissions change, a vanished mount — and this is how that shows up.
+    AgentCollectionFailures,
 }
 
 impl MetricKind {
     /// Every modelled metric, in display order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::CpuUtilization,
         Self::MemoryUtilization,
         Self::MemoryUsage,
@@ -77,6 +93,7 @@ impl MetricKind {
         Self::LoadAverage15m,
         Self::SystemUptime,
         Self::AgentHeartbeat,
+        Self::AgentCollectionFailures,
     ];
 
     /// The OpenTelemetry instrument name this metric is exported and queried under.
@@ -94,6 +111,18 @@ impl MetricKind {
             Self::LoadAverage15m => "system.cpu.load_average.15m",
             Self::SystemUptime => "system.uptime",
             Self::AgentHeartbeat => "pessimal.agent.heartbeat",
+            Self::AgentCollectionFailures => "pessimal.agent.collection_failures",
+        }
+    }
+
+    /// Which `OTel` instrument this metric is exported as.
+    #[must_use]
+    pub fn instrument_kind(self) -> InstrumentKind {
+        match self {
+            Self::NetworkIo | Self::AgentHeartbeat | Self::AgentCollectionFailures => {
+                InstrumentKind::Counter
+            }
+            _ => InstrumentKind::Gauge,
         }
     }
 
@@ -106,7 +135,7 @@ impl MetricKind {
             Self::MemoryUsage | Self::FilesystemUsage | Self::NetworkIo => MetricUnit::Bytes,
             Self::SystemUptime => MetricUnit::Seconds,
             Self::LoadAverage1m | Self::LoadAverage5m | Self::LoadAverage15m => MetricUnit::Load,
-            Self::AgentHeartbeat => MetricUnit::Count,
+            Self::AgentHeartbeat | Self::AgentCollectionFailures => MetricUnit::Count,
         }
     }
 
@@ -125,6 +154,7 @@ impl MetricKind {
             Self::LoadAverage15m => "Load (15m)",
             Self::SystemUptime => "Uptime",
             Self::AgentHeartbeat => "Heartbeat",
+            Self::AgentCollectionFailures => "Collection failures",
         }
     }
 
@@ -368,6 +398,28 @@ mod tests {
             MetricKind::from_otel_name("system.paging.faults"),
             Err(CoreError::UnknownMetric(_))
         ));
+    }
+
+    #[test]
+    fn cumulative_metrics_are_counters_and_the_rest_are_gauges() {
+        assert_eq!(
+            MetricKind::NetworkIo.instrument_kind(),
+            InstrumentKind::Counter,
+            "network I/O is cumulative bytes, not a level"
+        );
+        assert_eq!(
+            MetricKind::AgentHeartbeat.instrument_kind(),
+            InstrumentKind::Counter
+        );
+        assert_eq!(
+            MetricKind::CpuUtilization.instrument_kind(),
+            InstrumentKind::Gauge
+        );
+        assert_eq!(
+            MetricKind::MemoryUsage.instrument_kind(),
+            InstrumentKind::Gauge,
+            "bytes in use is a level, despite sharing a unit with network I/O"
+        );
     }
 
     #[test]

@@ -1,0 +1,34 @@
+# A local OpenTelemetry collector for developing against.
+#
+#   docker run --rm -p 4317:4317 -p 4318:4318 \
+#     -v "$PWD/dev/otelcol:/etc/otelcol-conf" \
+#     otel/opentelemetry-collector-contrib:latest \
+#     --config /etc/otelcol-conf/config.yaml
+#
+# Then point the agent at it:
+#
+#   PESSIMAL_ENDPOINT=http://localhost:4317 cargo run -p pessimal_agent_host -- \
+#     --config pessimal.example.toml
+#
+# Everything received is printed to the collector's stdout. Nothing is stored.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]

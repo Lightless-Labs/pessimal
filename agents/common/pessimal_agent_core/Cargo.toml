@@ -1,9 +1,26 @@
 [package]
 name = "pessimal_agent_core"
+description = "Shared agent machinery: configuration, backend presets, collection traits, and OTLP export."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pessimal_core = { workspace = true }
+chrono = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+tonic = { version = "0.14", default-features = false, features = ["transport"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

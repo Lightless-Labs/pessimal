@@ -1,0 +1,58 @@
+# Pessimal agent configuration.
+#
+# Every value here can be overridden by a PESSIMAL_* environment variable, so secrets need never
+# be written to disk: PESSIMAL_ENDPOINT, PESSIMAL_PRESET, PESSIMAL_PROTOCOL, PESSIMAL_API_KEY,
+# PESSIMAL_DATASET, PESSIMAL_INTERVAL_SECONDS, PESSIMAL_SERVICE_NAME, PESSIMAL_ENVIRONMENT,
+# PESSIMAL_HOST_NAME.
+
+[export]
+# otlp | signoz | clickstack | honeycomb
+# The preset only decides which authentication header the api_key goes into. Export itself is
+# plain OTLP in every case.
+preset = "otlp"
+
+# Required. Must include the scheme.
+#   SigNoz self-hosted   http://signoz.internal:4317
+#   SigNoz cloud         https://ingest.eu.signoz.cloud:443
+#   ClickStack / HyperDX https://in-otel.hyperdx.io:4317
+#   Honeycomb            https://api.honeycomb.io:443
+endpoint = "http://localhost:4317"
+
+# grpc (port 4317) | http/protobuf (port 4318)
+protocol = "grpc"
+
+# Seconds between exports. This is also the heartbeat period, so it is the unit the clients'
+# liveness thresholds count in.
+interval_seconds = 30
+
+# Must not exceed interval_seconds, or exports would overlap.
+timeout_seconds = 10
+
+# Leave unset for an unauthenticated self-hosted collector.
+# api_key = "..."
+
+# Honeycomb only, and required there: OTLP metrics are rejected without a dataset.
+# dataset = "pessimal"
+
+# Merged over whatever the preset produces; these win.
+[export.headers]
+# "x-tenant" = "acme"
+
+[resource]
+service_name = "pessimal-agent"
+environment = "default"
+
+# Overrides the detected hostname. This is the key the clients group by — changing it on a running
+# fleet splits that host's history in two.
+# host_name = "web-1"
+
+[resource.attributes]
+# "deployment.region" = "eu-west-3"
+
+[collection]
+# Mount points to report. An empty list means every mount sysinfo can see, which on a developer
+# machine is a great many.
+filesystems = ["/"]
+
+# Report network I/O per interface instead of one host total.
+per_interface_network = false

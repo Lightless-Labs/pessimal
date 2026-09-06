@@ -17,6 +17,6 @@ pub use clock::Clock;
 pub use error::{CoreError, Result};
 pub use host::{Host, HostId, HostSelector, OsFamily};
 pub use liveness::{Liveness, LivenessPolicy};
-pub use metric::{MetricKind, MetricPoint, MetricSeries, MetricUnit, TimeRange};
+pub use metric::{InstrumentKind, MetricKind, MetricPoint, MetricSeries, MetricUnit, TimeRange};
 pub use ports::{AlertRuleRepository, SeriesRequest, TelemetryQuery};
 pub use urn::Urn;

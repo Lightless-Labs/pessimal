@@ -23,6 +23,7 @@ pessimal_core = { path = "common/pessimal_core" }
 pessimal_agent_core = { path = "agents/common/pessimal_agent_core" }
 pessimal_client_core = { path = "clients/common/pessimal_client_core" }
 pessimal_query_signoz = { path = "clients/common/query/pessimal_query_signoz" }
+pessimal_agent_host = { path = "agents/host/pessimal_agent_host" }
 
 # Core
 thiserror = "2"
@@ -42,17 +43,17 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 url = "2"
 
 # Host metric collection
-sysinfo = "0.33"
+sysinfo = "0.39"
 hostname = "0.4"
 
 # OpenTelemetry
-opentelemetry = { version = "0.27", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.27", features = ["metrics", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", default-features = false, features = ["metrics", "grpc-tonic", "http-proto", "reqwest-client", "reqwest-rustls"] }
-opentelemetry-semantic-conventions = "0.27"
+opentelemetry = { version = "0.32", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["metrics", "grpc-tonic", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "tls-ring", "tls-roots", "internal-logs"] }
+opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
 
 # FFI
-uniffi = "0.31"
+uniffi = "0.32"
 
 # Observability
 tracing = "0.1"

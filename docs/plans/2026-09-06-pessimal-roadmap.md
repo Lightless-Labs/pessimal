@@ -32,7 +32,7 @@ tree on Linux/macOS/Windows.
 policy over heartbeat age, alert rules with dwell-period evaluation, URN identity, and the ports
 adapters implement. No I/O, fully unit-tested.
 
-### M2 — Host agent
+### M2 — Host agent ✅
 `pessimal_agent_core` (collection trait, resource attributes, OTLP exporter with backend presets,
 TOML config) and `pessimal_agent_host` (sysinfo-backed collector, CLI, run loop). Verified against a
 real OTLP endpoint, not just unit tests.
