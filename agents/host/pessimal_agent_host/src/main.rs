@@ -7,6 +7,7 @@
 mod host_collector;
 
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -44,7 +45,10 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    // A daemon logs to stderr, and only colours it when something is there to read it.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("PESSIMAL_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),

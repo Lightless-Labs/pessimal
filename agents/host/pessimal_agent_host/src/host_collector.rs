@@ -15,6 +15,11 @@ use pessimal_agent_core::error::Result;
 use pessimal_core::MetricKind;
 use sysinfo::{Disks, MemoryRefreshKind, Networks, RefreshKind, System};
 
+/// Semconv `state` value for the portion of a resource in use. Both `system.memory.usage` and
+/// `system.filesystem.usage` are defined per state, so a bare total is not the same metric a
+/// dashboard written against another OpenTelemetry host collector expects.
+const STATE_USED: &str = "used";
+
 /// Attribute value for bytes arriving.
 const DIRECTION_RECEIVE: &str = "receive";
 /// Attribute value for bytes leaving.
@@ -74,10 +79,10 @@ impl HostCollector {
         let total = self.system.total_memory();
         let used = self.system.used_memory();
 
-        let mut observations = vec![Observation::new(
-            MetricKind::MemoryUsage,
-            round_to_f64(used),
-        )];
+        let mut observations = vec![
+            Observation::new(MetricKind::MemoryUsage, round_to_f64(used))
+                .with_attribute(attribute::SYSTEM_MEMORY_STATE, STATE_USED),
+        ];
         if total > 0 {
             observations.push(Observation::new(
                 MetricKind::MemoryUtilization,
@@ -104,7 +109,8 @@ impl HostCollector {
 
             observations.push(
                 Observation::new(MetricKind::FilesystemUsage, round_to_f64(used))
-                    .with_attribute(attribute::SYSTEM_FILESYSTEM_MOUNTPOINT, &mount_point),
+                    .with_attribute(attribute::SYSTEM_FILESYSTEM_MOUNTPOINT, &mount_point)
+                    .with_attribute(attribute::SYSTEM_FILESYSTEM_STATE, STATE_USED),
             );
             observations.push(
                 Observation::new(
@@ -258,6 +264,36 @@ mod tests {
             used > 1_000_000.0,
             "{used} looks like KiB, not bytes; every host running this has more than a megabyte in use"
         );
+    }
+
+    #[test]
+    fn usage_metrics_declare_which_state_they_report() {
+        let observations = sample(&CollectionConfig::default());
+
+        for observation in observations
+            .iter()
+            .filter(|o| o.kind == MetricKind::MemoryUsage)
+        {
+            assert_eq!(
+                observation
+                    .attributes
+                    .get(attribute::SYSTEM_MEMORY_STATE)
+                    .map(String::as_str),
+                Some(STATE_USED)
+            );
+        }
+        for observation in observations
+            .iter()
+            .filter(|o| o.kind == MetricKind::FilesystemUsage)
+        {
+            assert_eq!(
+                observation
+                    .attributes
+                    .get(attribute::SYSTEM_FILESYSTEM_STATE)
+                    .map(String::as_str),
+                Some(STATE_USED)
+            );
+        }
     }
 
     #[test]

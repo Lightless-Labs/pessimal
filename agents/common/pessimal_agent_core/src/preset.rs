@@ -8,12 +8,27 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::AgentError;
 
+/// Deserialises through a type's [`FromStr`], so a config file accepts exactly the spellings an
+/// environment override does.
+///
+/// Without this, serde's derive would accept only its own `snake_case` rendering: the config file
+/// would take `http_protobuf` while `PESSIMAL_PROTOCOL` took `http/protobuf`, and the OpenTelemetry
+/// spelling everyone already knows would work in one place and not the other.
+fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: FromStr<Err = AgentError>,
+{
+    let raw = String::deserialize(deserializer)?;
+    raw.parse().map_err(serde::de::Error::custom)
+}
+
 /// The wire protocol used to reach the collector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportProtocol {
     /// OTLP over gRPC. The default; conventionally port 4317.
@@ -21,6 +36,12 @@ pub enum ExportProtocol {
     Grpc,
     /// OTLP over HTTP with binary protobuf. Conventionally port 4318.
     HttpProtobuf,
+}
+
+impl<'de> Deserialize<'de> for ExportProtocol {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserialize_from_str(deserializer)
+    }
 }
 
 impl fmt::Display for ExportProtocol {
@@ -63,7 +84,7 @@ impl Credentials {
 }
 
 /// A named OTLP destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendPreset {
     /// A bare OTLP endpoint. No headers are added; supply your own if the endpoint needs them.
@@ -169,6 +190,12 @@ impl FromStr for BackendPreset {
     }
 }
 
+impl<'de> Deserialize<'de> for BackendPreset {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserialize_from_str(deserializer)
+    }
+}
+
 impl fmt::Display for BackendPreset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.display_name())
@@ -178,6 +205,16 @@ impl fmt::Display for BackendPreset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Wrapper {
+        value: ExportProtocol,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct PresetWrapper {
+        value: BackendPreset,
+    }
 
     fn key(value: &str) -> Credentials {
         Credentials::new(Some(value.to_owned()), None)
@@ -311,5 +348,60 @@ mod tests {
             ExportProtocol::HttpProtobuf
         );
         assert!("thrift".parse::<ExportProtocol>().is_err());
+    }
+
+    #[test]
+    fn a_config_file_accepts_every_spelling_an_env_override_does() {
+        // The OpenTelemetry spelling is `http/protobuf`. Left to serde's derive, that would work
+        // in PESSIMAL_PROTOCOL and fail in the config file.
+        for spelling in ["grpc", "GRPC"] {
+            let parsed: Wrapper = toml::from_str(&format!("value = {spelling:?}")).expect("known");
+            assert_eq!(parsed.value, ExportProtocol::Grpc, "{spelling}");
+        }
+        for spelling in ["http", "http/protobuf", "http_protobuf"] {
+            let parsed: Wrapper = toml::from_str(&format!("value = {spelling:?}")).expect("known");
+            assert_eq!(parsed.value, ExportProtocol::HttpProtobuf, "{spelling}");
+        }
+    }
+
+    #[test]
+    fn a_config_file_accepts_every_preset_alias() {
+        for (spelling, expected) in [
+            ("otlp", BackendPreset::Otlp),
+            ("signoz", BackendPreset::Signoz),
+            ("SigNoz", BackendPreset::Signoz),
+            ("clickstack", BackendPreset::Clickstack),
+            ("hyperdx", BackendPreset::Clickstack),
+            ("honeycomb", BackendPreset::Honeycomb),
+        ] {
+            let parsed: PresetWrapper =
+                toml::from_str(&format!("value = {spelling:?}")).expect("known");
+            assert_eq!(parsed.value, expected, "{spelling}");
+        }
+    }
+
+    #[test]
+    fn a_config_file_rejects_an_unknown_spelling_with_a_useful_message() {
+        let error = toml::from_str::<Wrapper>(r#"value = "thrift""#).expect_err("unknown");
+        assert!(error.to_string().contains("grpc"), "{error}");
+    }
+
+    #[test]
+    fn what_is_serialized_can_be_read_back() {
+        for protocol in [ExportProtocol::Grpc, ExportProtocol::HttpProtobuf] {
+            let rendered = toml::to_string(&Wrapper { value: protocol }).expect("serialisable");
+            let parsed: Wrapper = toml::from_str(&rendered).expect("round trip");
+            assert_eq!(parsed.value, protocol);
+        }
+        for preset in [
+            BackendPreset::Otlp,
+            BackendPreset::Signoz,
+            BackendPreset::Clickstack,
+            BackendPreset::Honeycomb,
+        ] {
+            let rendered = toml::to_string(&PresetWrapper { value: preset }).expect("serialisable");
+            let parsed: PresetWrapper = toml::from_str(&rendered).expect("round trip");
+            assert_eq!(parsed.value, preset);
+        }
     }
 }
