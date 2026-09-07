@@ -1,0 +1,9 @@
+[bindings.swift]
+module_name = "PessimalFFI"
+cdylib_name = "pessimal_ffi"
+ffi_module_name = "PessimalFFIFFI"
+generate_module_map = true
+# Swift 6 concurrency checking rejects the mutable, non-Sendable classes UniFFI generates by
+# default; without these two the app fights the compiler at every boundary.
+experimental_sendable_value_types = true
+generate_immutable_records = true

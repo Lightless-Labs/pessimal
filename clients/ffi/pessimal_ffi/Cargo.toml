@@ -1,9 +1,32 @@
 [package]
 name = "pessimal_ffi"
+description = "UniFFI bridge exposing pessimal_client_core to Swift. Translation only, no business logic."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+# `staticlib` is what an iOS app links against; `cdylib` is what uniffi-bindgen reads to generate
+# the Swift; `lib` is what this crate's own tests use.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+pessimal_client_core = { workspace = true }
+pessimal_core = { workspace = true }
+pessimal_query_signoz = { workspace = true }
+chrono = { workspace = true }
+# The `tokio` feature is what makes `#[uniffi::export(async_runtime = "tokio")]` available. It is
+# needed because reqwest wants a tokio reactor — nothing in pessimal_client_core does.
+uniffi = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

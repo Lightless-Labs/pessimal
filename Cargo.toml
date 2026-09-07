@@ -23,6 +23,7 @@ pessimal_core = { path = "common/pessimal_core" }
 pessimal_agent_core = { path = "agents/common/pessimal_agent_core" }
 pessimal_client_core = { path = "clients/common/pessimal_client_core" }
 pessimal_query_signoz = { path = "clients/common/query/pessimal_query_signoz" }
+pessimal_ffi = { path = "clients/ffi/pessimal_ffi" }
 pessimal_agent_host = { path = "agents/host/pessimal_agent_host" }
 
 # Core
