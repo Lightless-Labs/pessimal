@@ -65,6 +65,23 @@ const PRESET_FORGET_HOST_AFTER_HOURS: i64 = 24;
 /// otherwise accumulates a day of ghosts, each carrying an evaluation per rule.
 const PRESET_MAX_RETAINED_HOSTS: u32 = 256;
 
+/// The absolute ceiling every duration in a [`PollTuning`] must satisfy: one year.
+///
+/// The bound exists to keep `now ± window` from overflowing, not to police UX. Every other
+/// interlock on [`PollTuning`] is *relative* — each duration bounded against another duration —
+/// and relative bounds are satisfied all the way up: a chart window of ten trillion seconds sits
+/// comfortably above `max_staleness + metric_step` and is a perfectly legal `Duration`, because
+/// `Duration` spans roughly a thousand times more than `DateTime<Utc>` can represent. The whole
+/// band between the two passes every relative check and is fatal the moment
+/// [`pessimal_core::TimeRange::ending_at`] subtracts it from `now`. That path now errors rather
+/// than panicking, but an error surfaced as a failed poll on every cycle is still a broken app;
+/// this is the layer that says no while the value is still a setting rather than a query.
+///
+/// A year is generous rather than tuned — the preset's longest duration is `forget_host_after` at
+/// 24 hours — and it leaves every derived window (at most about three times the largest field)
+/// five orders of magnitude below the overflow threshold.
+pub const MAX_TUNING_DURATION: Duration = Duration::days(365);
+
 /// The ceiling on [`PollTuning::backoff_after`]. Past five minutes a monitoring app has stopped
 /// monitoring.
 const BACKOFF_CEILING_MINUTES: i64 = 5;
@@ -118,7 +135,8 @@ impl PollTuning {
     /// `chart_window >= max_staleness + metric_step`;
     /// `forget_host_after >= liveness.down_threshold()`;
     /// `staleness_tolerance() <= freshness_budget()` (so the freshness ladder cannot invert);
-    /// `max_retained_hosts >= 1`; and, on the embedded policy itself,
+    /// `max_retained_hosts >= 1`; every duration, the policy's derived thresholds included, at or
+    /// below [`MAX_TUNING_DURATION`]; and, on the embedded policy itself,
     /// `liveness.heartbeat_interval() > 0`,
     /// `liveness.stale_threshold() < liveness.down_threshold()`, and
     /// `liveness.stale_threshold() >= 3 * liveness.heartbeat_interval()`, which is the only way
@@ -260,6 +278,35 @@ impl PollTuning {
 
     /// Every interlock, in one place so `new` and the wire type cannot drift apart.
     fn check(&self) -> Result<()> {
+        // The absolute ceiling before anything else, because every interlock below derives a sum,
+        // a multiple, or a threshold from these fields, and none of those mean anything once an
+        // operand has run away. `Duration::MAX` — what `scaled` and `summed` settle on — is
+        // roughly 1100 times what `DateTime<Utc>` can hold, and a `LivenessPolicy` threshold can
+        // report a product larger still, so a value arriving at the relative checks already
+        // enormous would sail through them and take the panic downstream instead. The relative
+        // interlocks are all satisfied *upwards*: not one of them can notice a duration that is
+        // merely vast. The policy's derived thresholds are listed explicitly for that reason —
+        // the interval alone does not bound them, since the multipliers are private `u32`s.
+        for (field, value) in [
+            ("heartbeat interval", self.liveness.heartbeat_interval()),
+            ("liveness stale threshold", self.liveness.stale_threshold()),
+            ("liveness down threshold", self.liveness.down_threshold()),
+            ("poll interval", self.poll_interval),
+            ("metric step", self.metric_step),
+            ("chart window", self.chart_window),
+            ("max staleness", self.max_staleness),
+            ("forget-host-after", self.forget_host_after),
+        ] {
+            if value > MAX_TUNING_DURATION {
+                return Err(ClientError::InvalidTuning(format!(
+                    "{field} {}s exceeds the maximum of {}s, past which a window subtracted from \
+                     the present overflows the representable range of a timestamp",
+                    value.num_seconds(),
+                    MAX_TUNING_DURATION.num_seconds()
+                )));
+            }
+        }
+
         // The policy first: everything below is measured against its thresholds, so a broken
         // policy would otherwise surface as a confusing complaint about some other field.
         //
@@ -806,6 +853,76 @@ mod tests {
         );
 
         assert!(matches!(rejected, Err(ClientError::InvalidTuning(_))));
+    }
+
+    #[test]
+    fn tuning_rejects_a_duration_beyond_what_a_timestamp_can_represent() {
+        // Ten trillion seconds is a legal `Duration` and satisfies every *relative* interlock —
+        // it is far above `max_staleness + metric_step` — but `DateTime<Utc>` reaches back only
+        // about 8.3e12 seconds, so `TimeRange::ending_at` used to panic on it inside `plan_poll`.
+        let beyond = secs(10_000_000_000_000);
+        let rejected = PollTuning::new(
+            liveness(),
+            secs(30),
+            secs(30),
+            beyond,
+            secs(150),
+            hours(24),
+            256,
+        );
+        assert!(matches!(rejected, Err(ClientError::InvalidTuning(_))));
+
+        // The ceiling is a guard, not a preference: the boundary itself is accepted, and so is
+        // every duration the preset uses.
+        let at_the_ceiling = PollTuning::new(
+            liveness(),
+            secs(30),
+            secs(30),
+            MAX_TUNING_DURATION,
+            secs(150),
+            MAX_TUNING_DURATION,
+            256,
+        );
+        assert!(at_the_ceiling.is_ok());
+    }
+
+    #[test]
+    fn tuning_rejects_a_liveness_policy_whose_thresholds_saturate() {
+        // `LivenessPolicy::new` checks only positivity and ordering, so this policy is legal in
+        // core; its `down_threshold()` saturates to `Duration::MAX`, which is ~1100x what a
+        // timestamp can hold. The ceiling has to look at the derived thresholds, not just at the
+        // interval it can see.
+        let absurd = LivenessPolicy::new(hours(1), 3, u32::MAX).expect("core accepts this policy");
+
+        let rejected = PollTuning::new(
+            absurd,
+            secs(30),
+            secs(30),
+            hours(1),
+            secs(150),
+            hours(24),
+            256,
+        );
+
+        assert!(matches!(rejected, Err(ClientError::InvalidTuning(_))));
+    }
+
+    #[test]
+    fn deserializing_an_overlong_duration_is_rejected() {
+        // The documented threat model: chrono's `TimeDelta` serde impl is a `[secs, nanos]` pair
+        // bounded only by `TimeDelta`'s own range, so a synced or hand-edited cache can carry a
+        // window no timestamp can subtract.
+        let mut wire = serde_json::to_value(PollTuning::default()).expect("tuning serialises");
+        wire["chart_window"] =
+            serde_json::to_value(secs(10_000_000_000_000)).expect("duration serialises");
+
+        let rejected: std::result::Result<PollTuning, _> = serde_json::from_value(wire);
+
+        let error = rejected.expect_err("serde must not bypass the constructor");
+        assert!(
+            error.to_string().contains("invalid poll tuning"),
+            "expected our own ceiling to fire, got: {error}"
+        );
     }
 
     #[test]

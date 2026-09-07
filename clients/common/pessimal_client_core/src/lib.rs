@@ -73,7 +73,8 @@ pub mod view;
 pub mod testing;
 
 pub use crate::config::{
-    DEFAULT_DETAIL_METRICS, DEFAULT_OVERVIEW_METRICS, FleetConfig, PollTuning, TuningWarning,
+    DEFAULT_DETAIL_METRICS, DEFAULT_OVERVIEW_METRICS, FleetConfig, MAX_TUNING_DURATION, PollTuning,
+    TuningWarning,
 };
 pub use crate::error::{
     ClientError, FailureSource, PollFailure, PollFailureKind, Result, worst_failure,

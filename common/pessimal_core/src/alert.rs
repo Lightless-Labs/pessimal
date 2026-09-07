@@ -62,9 +62,26 @@ pub struct AlertRule {
 }
 
 impl AlertRule {
+    /// The longest dwell a rule may carry: one year.
+    ///
+    /// The bound exists to keep `since + for_duration` from overflowing, not to police UX. Every
+    /// consumer of a `Pending` state adds the dwell to the instant the breach began —
+    /// `pessimal_client_core`'s `AlertView::fires_at` is the one users see — and
+    /// `DateTime + Duration` panics rather than erroring. `Duration` spans roughly a thousand
+    /// times more than `DateTime<Utc>` can represent, so without an absolute ceiling a dwell that
+    /// is merely large is indistinguishable from one that is fatal, and the panic crosses UniFFI
+    /// as an app crash on every launch: the rule is in `FleetConfig`, the `Pending` evaluation is
+    /// in `FleetState`, and both are persisted.
+    ///
+    /// A year is generous rather than tuned — a dwell measured in months has already stopped
+    /// describing anything an operator would wait for — and it sits five orders of magnitude below
+    /// the overflow threshold, so no arithmetic downstream of it can get close either.
+    pub const MAX_FOR_DURATION: Duration = Duration::days(365);
+
     /// # Errors
-    /// Returns [`CoreError::InvalidRule`] for an empty name, a non-finite threshold, or a negative
-    /// dwell; [`CoreError::InvalidUrn`] if the environment is not a usable URN segment.
+    /// Returns [`CoreError::InvalidRule`] for an empty name, a non-finite threshold, a negative
+    /// dwell, or a dwell above [`AlertRule::MAX_FOR_DURATION`]; [`CoreError::InvalidUrn`] if the
+    /// environment is not a usable URN segment.
     pub fn new(
         environment: &str,
         name: impl Into<String>,
@@ -86,6 +103,14 @@ impl AlertRule {
             return Err(CoreError::InvalidRule(
                 "for_duration must not be negative".to_owned(),
             ));
+        }
+        if for_duration > Self::MAX_FOR_DURATION {
+            return Err(CoreError::InvalidRule(format!(
+                "for_duration {}s exceeds the maximum dwell of {}s, past which `since + \
+                 for_duration` overflows the representable range of a timestamp",
+                for_duration.num_seconds(),
+                Self::MAX_FOR_DURATION.num_seconds()
+            )));
         }
         Ok(Self {
             id: Urn::with_id(environment, "alerts", "rule", Uuid::now_v7())?,
@@ -380,6 +405,46 @@ mod tests {
                 Duration::seconds(-1),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_the_maximum_dwell_and_rejects_a_second_past_it() {
+        let with_dwell = |dwell| {
+            AlertRule::new(
+                "prod",
+                "Patient",
+                MetricKind::CpuUtilization,
+                Comparator::GreaterThan,
+                0.9,
+                dwell,
+            )
+        };
+
+        assert!(
+            with_dwell(AlertRule::MAX_FOR_DURATION).is_ok(),
+            "the boundary itself is legal; the ceiling is a guard, not a preference"
+        );
+        assert!(matches!(
+            with_dwell(AlertRule::MAX_FOR_DURATION + Duration::seconds(1)),
+            Err(CoreError::InvalidRule(_))
+        ));
+
+        // The value from the reproduction: legal as a `Duration`, fatal as an addend to a
+        // timestamp. Without the ceiling this rule reached `since + for_duration` and panicked.
+        assert!(matches!(
+            with_dwell(Duration::seconds(10_000_000_000_000)),
+            Err(CoreError::InvalidRule(_))
+        ));
+    }
+
+    #[test]
+    fn a_dwell_at_the_ceiling_cannot_overflow_a_realistic_breach_instant() {
+        assert!(
+            at(0)
+                .checked_add_signed(AlertRule::MAX_FOR_DURATION)
+                .is_some(),
+            "the ceiling exists precisely so this addition is total"
         );
     }
 

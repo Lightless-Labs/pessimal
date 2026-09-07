@@ -198,15 +198,28 @@ impl TimeRange {
 
     /// The window of length `window` ending at `now`.
     ///
+    /// The subtraction is checked rather than plain `now - window`, because `Duration` spans
+    /// roughly a thousand times more than `DateTime<Utc>` can represent: every value in the band
+    /// between the two is a `window` that is perfectly well-formed on its own and fatal here.
+    /// `DateTime - Duration` panics on that, and a panic raised inside a poll crosses UniFFI as an
+    /// app crash rather than as an error the caller can show. Returning the error the signature
+    /// already promises costs nothing and makes this function honest about its own contract.
+    ///
     /// # Errors
-    /// Returns [`CoreError::InvalidTimeRange`] if `window` is not strictly positive.
+    /// Returns [`CoreError::InvalidTimeRange`] if `window` is not strictly positive, or if
+    /// `now - window` falls outside the range `DateTime<Utc>` can represent.
     pub fn ending_at(now: DateTime<Utc>, window: Duration) -> Result<Self, CoreError> {
         if window <= Duration::zero() {
             return Err(CoreError::InvalidTimeRange(format!(
                 "window {window} must be positive"
             )));
         }
-        Self::new(now - window, now)
+        let start = now.checked_sub_signed(window).ok_or_else(|| {
+            CoreError::InvalidTimeRange(format!(
+                "window {window} reaches back past the earliest representable instant from {now}"
+            ))
+        })?;
+        Self::new(start, now)
     }
 
     #[must_use]
@@ -492,6 +505,25 @@ mod tests {
         assert_eq!(range.end(), at(600));
         assert_eq!(range.duration(), Duration::minutes(5));
         assert!(TimeRange::ending_at(at(600), Duration::zero()).is_err());
+    }
+
+    #[test]
+    fn ending_at_rejects_a_window_longer_than_time_itself() {
+        // `Duration` spans ~9.2e15 seconds; `DateTime<Utc>` reaches back only ~8.3e12 from here.
+        // Every value in that band is a well-formed duration that `now - window` would panic on,
+        // and a panic inside a poll crosses UniFFI as an app crash.
+        let beyond = Duration::seconds(10_000_000_000_000);
+        assert!(matches!(
+            TimeRange::ending_at(at(0), beyond),
+            Err(CoreError::InvalidTimeRange(_))
+        ));
+
+        // The saturating helpers in the client crate hand this exact value to `ending_at` when
+        // their own arithmetic overflows, so it is the boundary that matters most.
+        assert!(matches!(
+            TimeRange::ending_at(at(0), Duration::MAX),
+            Err(CoreError::InvalidTimeRange(_))
+        ));
     }
 
     #[test]

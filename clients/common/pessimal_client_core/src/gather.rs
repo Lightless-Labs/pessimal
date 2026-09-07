@@ -236,7 +236,15 @@ pub async fn probe_backend(
 /// Private, and it clamps instead of propagating, because [`probe_backend`] is infallible by
 /// design. A [`PollTuning`] built through its constructor already forces every derived window
 /// strictly positive, so the clamp is a guard against a future field rather than a case any
-/// caller meets — and with the clamp in place `TimeRange::ending_at` cannot fail.
+/// caller meets.
+///
+/// The clamp alone did not make `TimeRange::ending_at` total, and the doc here used to claim it
+/// did. Positivity was never the whole failure mode: `ending_at` also fails when the window
+/// reaches back past the earliest representable instant, and `host_window()` is a sum of
+/// durations that were only ever bounded against each other. What closes it is
+/// [`crate::config::MAX_TUNING_DURATION`], which holds `host_window()` under about three years —
+/// so the `expect` is unreachable for any `now` that is not itself within three years of the
+/// start of representable time, roughly 262 millennia before the Unix epoch.
 fn probe_window(now: DateTime<Utc>, tuning: &PollTuning) -> TimeRange {
     let length = tuning.host_window().max(Duration::seconds(1));
     TimeRange::ending_at(now, length).expect("a strictly positive window is a valid range")

@@ -40,6 +40,28 @@ pub struct LivenessPolicy {
     down_after_intervals: u32,
 }
 
+/// `interval * multiplier`, saturating instead of panicking.
+///
+/// `Duration * i32` is `checked_mul(...).expect(...)`, and both callers are `#[must_use]` getters
+/// with no `Result` to return — a panic in one of them crosses UniFFI as an app crash rather than
+/// as an error. [`LivenessPolicy::new`] checks only that the interval is positive and that the
+/// multipliers are non-zero and ordered, so a policy with a decades-long interval and a
+/// `u32::MAX` multiplier passes validation, round-trips through JSON, and used to blow up in its
+/// own accessor. Saturating is monotone-correct for every comparison a caller makes: a threshold
+/// this large is already further away than any heartbeat age could reach, so it answers the same
+/// question the exact value would.
+///
+/// Note what this does *not* promise. `checked_mul` guards only against overflowing `i64`
+/// seconds, so the product it returns can still exceed `TimeDelta::MAX` — a `Duration` that is
+/// well-formed enough to compare against but far outside what a timestamp can represent. Callers
+/// that go on to add a threshold to an instant must bound it themselves;
+/// `pessimal_client_core`'s `MAX_TUNING_DURATION` is where that happens.
+fn scaled(interval: Duration, multiplier: u32) -> Duration {
+    interval
+        .checked_mul(i32::try_from(multiplier).unwrap_or(i32::MAX))
+        .unwrap_or(Duration::MAX)
+}
+
 impl LivenessPolicy {
     /// # Errors
     /// Returns [`CoreError::InvalidRule`] if the interval is not positive, if either multiplier is
@@ -79,13 +101,13 @@ impl LivenessPolicy {
     /// Age beyond which a host is [`Liveness::Stale`].
     #[must_use]
     pub fn stale_threshold(&self) -> Duration {
-        self.heartbeat_interval * i32::try_from(self.stale_after_intervals).unwrap_or(i32::MAX)
+        scaled(self.heartbeat_interval, self.stale_after_intervals)
     }
 
     /// Age beyond which a host is [`Liveness::Down`].
     #[must_use]
     pub fn down_threshold(&self) -> Duration {
-        self.heartbeat_interval * i32::try_from(self.down_after_intervals).unwrap_or(i32::MAX)
+        scaled(self.heartbeat_interval, self.down_after_intervals)
     }
 
     /// Judges a host from the timestamp of its most recent heartbeat.
@@ -167,6 +189,31 @@ mod tests {
         let policy = policy();
         assert_eq!(policy.stale_threshold(), Duration::seconds(60));
         assert_eq!(policy.down_threshold(), Duration::seconds(150));
+    }
+
+    #[test]
+    fn thresholds_saturate_rather_than_panic_on_an_absurd_multiplier() {
+        // `new` checks only that the interval is positive and the multipliers are non-zero and
+        // ordered, so this policy is legal and round-trips through JSON. Its thresholds overflow
+        // `i64` seconds, which used to panic inside `#[must_use]` getters that have no `Result` to
+        // return — and a panic crosses UniFFI as an app crash.
+        let absurd =
+            LivenessPolicy::new(Duration::days(100_000), 3, u32::MAX).expect("valid policy");
+
+        assert_eq!(absurd.down_threshold(), Duration::MAX);
+        assert_eq!(
+            absurd.evaluate(Some(at(0)), at(1_000_000)),
+            Liveness::Alive,
+            "a saturated threshold is further away than any age, which is the answer the exact \
+             value would give too"
+        );
+
+        // Below the `i64`-seconds cliff, `checked_mul` succeeds and hands back a product larger
+        // than `TimeDelta::MAX`. No panic, but nothing a timestamp could hold either — which is
+        // why the client crate bounds these thresholds rather than trusting them.
+        let merely_enormous =
+            LivenessPolicy::new(Duration::days(365), 3, u32::MAX).expect("valid policy");
+        assert!(merely_enormous.down_threshold() > Duration::days(365));
     }
 
     #[test]

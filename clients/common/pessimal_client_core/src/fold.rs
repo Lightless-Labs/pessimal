@@ -269,7 +269,13 @@ impl FleetState {
         // `Stop` carries no delay, and leaving this unset would disable the blind-gap reset
         // exactly when it is most needed: a key fixed three hours later would fire every frozen
         // `Pending` off a three-hour-old `since` on the first manual poll.
-        next.advised_next_poll = Some(now + advice.delay().unwrap_or_else(Duration::zero));
+        // Checked: `backoff_after` caps the delay at five minutes, so this can only saturate when
+        // `now` itself sits at the end of representable time — but falling back to `now` keeps the
+        // instant armed, and an armed instant is what step 1 measures against.
+        next.advised_next_poll = Some(
+            now.checked_add_signed(advice.delay().unwrap_or_else(Duration::zero))
+                .unwrap_or(now),
+        );
 
         let view = next.view(config);
         FleetUpdate {
@@ -537,7 +543,13 @@ impl FleetState {
         let Some(advised) = self.advised_next_poll else {
             return;
         };
-        if now <= advised + max_staleness {
+        // Checked, because `advised_next_poll` is persisted JSON and a restored instant near the
+        // end of representable time would panic on the addition. Overflow means the deadline is
+        // beyond any `now` that could exist, so "we are not yet past it" is the exact answer.
+        if advised
+            .checked_add_signed(max_staleness)
+            .is_none_or(|deadline| now <= deadline)
+        {
             return;
         }
         for per_rule in self.evaluations.values_mut() {
@@ -978,7 +990,14 @@ impl FleetState {
                 phase,
                 severity: Severity::from_phase(phase),
                 breaching_since,
-                fires_at: breaching_since.map(|since| since + rule.for_duration()),
+                // Checked, and `None` on overflow, so a dwell that somehow slipped past both
+                // `AlertRule::new` and `validate_rule` renders as "no fire time known" instead of
+                // crashing the app. This is the last layer: `since` comes out of a persisted
+                // `FleetState` and the rule out of a persisted `FleetConfig`, so a value that
+                // reaches here reaches here on every launch, through the synchronous `view()`
+                // path as well as the fold.
+                fires_at: breaching_since
+                    .and_then(|since| since.checked_add_signed(rule.for_duration())),
                 latest_value: stored.and_then(|held| held.latest_value),
                 series_label: stored.and_then(|held| held.dominant_label.clone()),
                 evidence: stored
@@ -1164,6 +1183,12 @@ mod tests {
 
     fn cpu(name: &str, samples: &[(DateTime<Utc>, f64)]) -> MetricSeries {
         series(name, MetricKind::CpuUtilization, samples)
+    }
+
+    fn mount(path: &str) -> BTreeMap<String, String> {
+        let mut attributes = BTreeMap::new();
+        attributes.insert("system.filesystem.mountpoint".to_owned(), path.to_owned());
+        attributes
     }
 
     fn series(name: &str, kind: MetricKind, samples: &[(DateTime<Utc>, f64)]) -> MetricSeries {
@@ -1520,6 +1545,76 @@ mod tests {
         assert_eq!(
             resumed.state.evaluation(rule.id(), &host_id),
             Some(AlertState::Firing { since: at(0) })
+        );
+    }
+
+    #[test]
+    fn a_breach_instant_too_close_to_the_end_of_time_renders_no_fire_time() {
+        // The last layer, tested where the earlier layers cannot reach it. A dwell this long is
+        // legal — it is exactly `AlertRule::MAX_FOR_DURATION` — so nothing upstream rejects the
+        // rule; what makes `since + for_duration` overflow is the `since`, and `since` comes out
+        // of a persisted `FleetState` rather than out of any constructor.
+        let rule = AlertRule::new(
+            "prod",
+            "CPU hot",
+            MetricKind::CpuUtilization,
+            Comparator::GreaterThan,
+            0.9,
+            AlertRule::MAX_FOR_DURATION,
+        )
+        .expect("the ceiling itself is a legal dwell");
+        let config = config().with_rules(vec![rule.clone()]);
+        let host_id = HostId::new("web-1");
+
+        let folded = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(
+                &config,
+                at(0),
+                vec![host("web-1", at(0))],
+                &[cpu("web-1", &[(at(0), 0.95)])],
+            ),
+        );
+        assert_eq!(
+            folded.state.evaluation(rule.id(), &host_id),
+            Some(AlertState::Pending { since: at(0) })
+        );
+
+        // Within a dwell of the end of representable time. Nothing in the crate mints an instant
+        // like this, and nothing has to: `DateTime<Utc>`'s serde impl accepts the whole range, so
+        // a synced or hand-edited cache can carry one.
+        let brink = DateTime::<Utc>::MAX_UTC - Duration::days(200);
+        assert!(
+            brink
+                .checked_add_signed(AlertRule::MAX_FOR_DURATION)
+                .is_none(),
+            "the fixture must actually overflow, or this test proves nothing"
+        );
+
+        let mut cached: serde_json::Value =
+            serde_json::from_str(&folded.state.to_json().expect("serialisable"))
+                .expect("valid JSON");
+        cached["evaluations"]["web-1"][rule.id().to_string()]["evaluation"]["state"] =
+            serde_json::json!({ "Pending": { "since": brink } });
+        let (restored, report) = FleetState::restore(BACKEND, &cached.to_string());
+        assert_eq!(report.evaluations_restored, 1);
+
+        // `view()` is the synchronous path an app calls on launch, before any poll. It used to
+        // panic here, which crossed UniFFI as a crash on every single launch.
+        let view = restored.view(&config);
+        let alert = view
+            .alerts
+            .first()
+            .expect("the rule is enabled and matches");
+        assert_eq!(alert.phase, AlertPhase::Pending);
+        assert_eq!(
+            alert.breaching_since,
+            Some(brink),
+            "the breach is still reported; only the arithmetic that cannot be done is dropped"
+        );
+        assert_eq!(
+            alert.fires_at, None,
+            "an unrepresentable fire time reads as unknown, never as a crash"
         );
     }
 
@@ -2284,5 +2379,47 @@ mod tests {
         assert_eq!(alert.phase, AlertPhase::Firing);
         assert_eq!(alert.series_label, Some("/data".to_owned()));
         assert!((alert.latest_value.expect("a judged value") - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tied_mounts_name_the_same_series_however_the_backend_ordered_them() {
+        let disk = AlertRule::new(
+            "prod",
+            "Disk full",
+            MetricKind::FilesystemUtilization,
+            Comparator::GreaterThan,
+            0.9,
+            Duration::zero(),
+        )
+        .expect("a valid rule");
+        let config = config().with_rules(vec![disk]);
+
+        // A bind mount reports `/` and `/data` identically. `query_series` promises no order, so
+        // the two arrive either way round and the firing row must still name one mount.
+        let root = series("web-1", MetricKind::FilesystemUtilization, &[(at(0), 0.95)])
+            .with_attributes(mount("/"));
+        let data = series("web-1", MetricKind::FilesystemUtilization, &[(at(0), 0.95)])
+            .with_attributes(mount("/data"));
+
+        let first = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(
+                &config,
+                at(0),
+                vec![host("web-1", at(0))],
+                &[root.clone(), data.clone()],
+            ),
+        );
+        let second = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(&config, at(0), vec![host("web-1", at(0))], &[data, root]),
+        );
+
+        assert_eq!(first.view.alerts[0].phase, AlertPhase::Firing);
+        assert_eq!(
+            first.view.alerts[0].series_label, second.view.alerts[0].series_label,
+            "the subtitle must not alternate between two mounts that never changed"
+        );
+        assert_eq!(first.view.alerts[0].series_label, Some("/".to_owned()));
     }
 }

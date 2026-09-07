@@ -104,10 +104,13 @@ pub struct PollPlan {
 /// not a convention someone can forget.
 ///
 /// # Errors
-/// [`crate::error::ClientError::InvalidTimeRange`] if a window is not strictly positive. A
-/// [`crate::config::PollTuning`] built by its constructor cannot cause this — every window is
-/// derived from durations the interlocks already forced positive — so this is a guard against a
-/// future field, not a case a caller has to handle thoughtfully.
+/// [`crate::error::ClientError::InvalidTimeRange`] if a window is not strictly positive, or if it
+/// reaches back past the earliest instant a timestamp can represent. A
+/// [`crate::config::PollTuning`] built by its constructor cannot cause either — the interlocks
+/// force every duration positive, and [`crate::config::MAX_TUNING_DURATION`] holds every derived
+/// window five orders of magnitude inside the representable range. That second half is why the
+/// claim is safe to make: relative interlocks alone left a whole band of legal `Duration` values
+/// that satisfied every one of them and still overflowed here.
 pub fn plan_poll(config: &FleetConfig, now: DateTime<Utc>) -> Result<PollPlan> {
     let tuning = config.tuning;
     let step = tuning.metric_step();

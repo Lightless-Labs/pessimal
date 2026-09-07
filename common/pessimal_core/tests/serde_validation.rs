@@ -146,6 +146,28 @@ fn a_rule_with_a_negative_dwell_is_refused() {
 }
 
 #[test]
+fn a_rule_whose_dwell_outruns_the_calendar_is_refused() {
+    // chrono's `TimeDelta` serde impl is a `[secs, nanos]` pair bounded only by `TimeDelta`'s own
+    // range, which is ~1100x what a timestamp can hold. A dwell from that band deserialises
+    // cleanly and then overflows the first time anything computes `since + for_duration`.
+    let mut v = wire(&a_rule());
+    v["for_duration"] = json!([10_000_000_000_000_i64, 0]);
+    assert!(serde_json::from_value::<AlertRule>(v).is_err());
+
+    let mut boundary = wire(&a_rule());
+    boundary["for_duration"] = json!([AlertRule::MAX_FOR_DURATION.num_seconds(), 0]);
+    assert!(
+        serde_json::from_value::<AlertRule>(boundary).is_ok(),
+        "the ceiling itself must survive a round trip, or the bound rejects rules we mint"
+    );
+}
+
+#[test]
+fn a_time_range_whose_window_predates_representable_time_is_refused() {
+    assert!(TimeRange::ending_at(at(0), Duration::seconds(10_000_000_000_000)).is_err());
+}
+
+#[test]
 fn a_restored_rule_keeps_its_identity_and_its_settings() {
     let rule = a_rule()
         .with_selector(HostSelector::Host("web-1".into()))

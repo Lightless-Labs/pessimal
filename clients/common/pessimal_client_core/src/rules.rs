@@ -26,9 +26,9 @@ use crate::view::alertable;
 ///
 /// # Errors
 /// [`ClientError::InvalidRule`] for an empty name, a non-finite threshold, a negative dwell, a
-/// non-alertable metric (`AgentHeartbeat`), or `HostSelector::AnyOf(vec![])`, which matches
-/// nothing and would silently never fire. [`ClientError::InvalidUrn`] if `environment` is empty
-/// or contains `::`.
+/// dwell above [`AlertRule::MAX_FOR_DURATION`], a non-alertable metric (`AgentHeartbeat`), or
+/// `HostSelector::AnyOf(vec![])`, which matches nothing and would silently never fire.
+/// [`ClientError::InvalidUrn`] if `environment` is empty or contains `::`.
 pub fn draft_rule(
     environment: &str,
     name: &str,
@@ -60,7 +60,8 @@ pub fn draft_rule(
 ///
 /// # Errors
 /// [`ClientError::InvalidRule`] for an empty name, a non-finite threshold, a negative dwell, a
-/// non-alertable metric, or an empty `AnyOf` selector.
+/// dwell above [`AlertRule::MAX_FOR_DURATION`], a non-alertable metric, or an empty `AnyOf`
+/// selector.
 pub fn validate_rule(rule: &AlertRule) -> Result<()> {
     check_fields(
         &rule.name,
@@ -96,6 +97,18 @@ fn check_fields(
         return Err(ClientError::InvalidRule(
             "for_duration must not be negative".to_owned(),
         ));
+    }
+    // `AlertRule::MAX_FOR_DURATION` rather than a literal, so the two enforcement points cannot
+    // drift and a rule core accepts can never be one this validator flags. The bound is about
+    // overflow, not UX: `AlertView::fires_at` adds this dwell to the instant the breach began,
+    // and past the ceiling that addition leaves the range a timestamp can represent.
+    if for_duration > AlertRule::MAX_FOR_DURATION {
+        return Err(ClientError::InvalidRule(format!(
+            "for_duration {}s exceeds the maximum dwell of {}s, past which the instant a rule \
+             would fire is not representable",
+            for_duration.num_seconds(),
+            AlertRule::MAX_FOR_DURATION.num_seconds()
+        )));
     }
     if !alertable(metric) {
         return Err(ClientError::InvalidRule(format!(
@@ -324,6 +337,37 @@ mod tests {
             HostSelector::All,
         );
         assert!(matches!(backwards, Err(ClientError::InvalidRule(_))));
+    }
+
+    #[test]
+    fn draft_rule_and_validate_rule_reject_a_dwell_past_the_ceiling() {
+        let with_dwell = |dwell| {
+            draft_rule(
+                "prod",
+                "CPU hot",
+                MetricKind::CpuUtilization,
+                Comparator::GreaterThan,
+                0.9,
+                dwell,
+                HostSelector::All,
+            )
+        };
+
+        // The reproduction's value: a legal `Duration` that used to reach
+        // `AlertView::fires_at` and panic on `since + for_duration`.
+        assert!(matches!(
+            with_dwell(Duration::seconds(10_000_000_000_000)),
+            Err(ClientError::InvalidRule(_))
+        ));
+        assert!(matches!(
+            with_dwell(AlertRule::MAX_FOR_DURATION + Duration::seconds(1)),
+            Err(ClientError::InvalidRule(_))
+        ));
+
+        // The boundary is legal, and a rule this crate drafts must survive its own validator —
+        // which is the whole reason both routes read the same constant.
+        let at_the_ceiling = with_dwell(AlertRule::MAX_FOR_DURATION).expect("the bound is legal");
+        assert!(validate_rule(&at_the_ceiling).is_ok());
     }
 
     #[test]
