@@ -45,11 +45,13 @@ adapters implement. No I/O, fully unit-tested.
 TOML config) and `pessimal_agent_host` (sysinfo-backed collector, CLI, run loop). Verified against a
 real OTLP endpoint, not just unit tests.
 
-### M3 — SigNoz query adapter and client core (adapter done)
+### M3 — SigNoz query adapter and client core ✅
 `pessimal_query_signoz` implements `TelemetryQuery` against `/api/v5/query_range`, with the naming
 convention (dotted vs underscored) as a setting rather than an assumption. Tested at the HTTP level
-against a mock server; not yet run against a live instance. `pessimal_client_core` — orchestrating
-polling, liveness, and alert evaluation across a fleet — is still to do.
+against a mock server; not yet run against a live instance. `pessimal_client_core` is
+plan-gather-fold: pure planning, one async gather that never fails, and a pure fold returning the
+next state, the view, the alert transitions, and polling advice. See
+[`2026-09-07-m3-client-core.md`](2026-09-07-m3-client-core.md).
 
 ### M4 — FFI bridge
 `pessimal_ffi` exposing the client core to Swift. Bindgen wired up, generated bindings checked in,
