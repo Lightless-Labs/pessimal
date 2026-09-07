@@ -6,7 +6,8 @@
 
 use chrono::{Duration, TimeZone, Utc};
 use pessimal_core::{
-    CoreError, HostId, HostSelector, MetricKind, OsFamily, SeriesRequest, TelemetryQuery, TimeRange,
+    CoreError, HostId, HostSelector, LivenessPolicy, MetricKind, OsFamily, SeriesRequest,
+    TelemetryQuery, TimeRange,
 };
 use pessimal_query_signoz::{MetricNaming, SignozConfig, SignozQuery};
 use serde_json::{Value, json};
@@ -613,6 +614,36 @@ async fn a_redirect_is_refused_rather_than_followed_to_another_host() {
     }
 }
 
+#[tokio::test]
+async fn a_hung_backend_times_out_rather_than_hanging_the_caller() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(response(&[]))
+                .set_delay(std::time::Duration::from_secs(30)),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = SignozQuery::new(
+        SignozConfig::new(server.uri(), API_KEY)
+            .expect("valid")
+            .with_request_timeout(std::time::Duration::from_millis(150)),
+    )
+    .expect("client builds");
+
+    // reqwest has no default timeout, so without one configured this test would hang for 30s.
+    let error = adapter
+        .check_connection()
+        .await
+        .expect_err("should time out");
+    assert!(
+        matches!(error, CoreError::Unreachable(_)),
+        "a timeout is the backend being unreachable, not the backend erroring: {error}"
+    );
+}
+
 #[test]
 fn the_api_key_is_redacted_from_debug_output() {
     let config = SignozConfig::new("https://eu.signoz.cloud", "super-secret-key").expect("valid");
@@ -634,6 +665,14 @@ fn the_api_key_is_redacted_from_debug_output() {
 fn an_empty_api_key_is_rejected_at_construction() {
     assert!(SignozConfig::new("https://eu.signoz.cloud", "").is_err());
     assert!(SignozConfig::new("https://eu.signoz.cloud", "   ").is_err());
+}
+
+#[test]
+fn for_policy_keeps_the_query_step_and_the_liveness_yardstick_in_agreement() {
+    let policy = LivenessPolicy::new(Duration::seconds(15), 3, 5).expect("valid");
+    let config =
+        SignozConfig::for_policy("https://eu.signoz.cloud", API_KEY, &policy).expect("valid");
+    assert_eq!(config.heartbeat_interval(), policy.heartbeat_interval());
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! The SigNoz adapter.
 
 use std::fmt;
+use std::time::Duration as StdDuration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -27,6 +28,13 @@ const BACKEND_NAME: &str = "SigNoz";
 /// so a proxy's HTML page does not become the error message.
 const MAX_ERROR_BODY: usize = 512;
 
+/// Default seconds before a query is abandoned.
+///
+/// reqwest has no default timeout at all, so without this a hung SigNoz hangs the caller forever —
+/// which on a phone means a spinner that never resolves and a `CoreError::Unreachable` that can
+/// never actually be produced by a timeout.
+const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+
 /// How to reach a SigNoz instance.
 ///
 /// Fields are private: `base_url` is validated at construction and `api_key` is a credential, so
@@ -37,6 +45,7 @@ pub struct SignozConfig {
     api_key: String,
     naming: MetricNaming,
     heartbeat_interval: Duration,
+    request_timeout: StdDuration,
 }
 
 /// Redacted, because the obvious thing to do with a config that will not work is to log it — and
@@ -49,6 +58,7 @@ impl fmt::Debug for SignozConfig {
             .field("api_key", &"<redacted>")
             .field("naming", &self.naming)
             .field("heartbeat_interval", &self.heartbeat_interval)
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }
@@ -76,7 +86,25 @@ impl SignozConfig {
             naming: MetricNaming::default(),
             // Taken from the domain's own default so the two cannot drift apart.
             heartbeat_interval: LivenessPolicy::default().heartbeat_interval(),
+            request_timeout: StdDuration::from_secs(DEFAULT_TIMEOUT_SECONDS),
         })
+    }
+
+    /// Builds a config whose heartbeat interval is taken from the liveness policy it will be
+    /// judged by.
+    ///
+    /// The query step and the liveness yardstick have to agree: the step decides how precisely a
+    /// heartbeat's age can be measured, and the policy decides what that age means. Setting them
+    /// separately is how they end up disagreeing with nothing to report it.
+    ///
+    /// # Errors
+    /// As [`SignozConfig::new`].
+    pub fn for_policy(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        policy: &LivenessPolicy,
+    ) -> Result<Self> {
+        Ok(Self::new(base_url, api_key)?.with_heartbeat_interval(policy.heartbeat_interval()))
     }
 
     #[must_use]
@@ -94,6 +122,13 @@ impl SignozConfig {
         self
     }
 
+    /// Overrides how long a query may take before it is abandoned.
+    #[must_use]
+    pub fn with_request_timeout(mut self, timeout: StdDuration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -107,6 +142,11 @@ impl SignozConfig {
     #[must_use]
     pub fn heartbeat_interval(&self) -> Duration {
         self.heartbeat_interval
+    }
+
+    #[must_use]
+    pub fn request_timeout(&self) -> StdDuration {
+        self.request_timeout
     }
 
     #[must_use]
@@ -138,8 +178,13 @@ impl SignozQuery {
         // and reqwest only strips `Authorization` across a host change — a custom header would be
         // replayed to wherever the redirect points. A query API has no legitimate reason to
         // redirect, so following one is all risk and no benefit.
+        //
+        // The timeout is not optional either: reqwest has none by default, so a hung SigNoz would
+        // hang the caller forever, and `CoreError::Unreachable` could never be produced by a
+        // timeout.
         let http = Client::builder()
             .use_native_tls()
+            .timeout(config.request_timeout())
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| {
