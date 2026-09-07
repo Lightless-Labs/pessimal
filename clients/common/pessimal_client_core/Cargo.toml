@@ -1,9 +1,30 @@
 [package]
 name = "pessimal_client_core"
+description = "Fleet polling, liveness, and alert evaluation for the Pessimal clients. Plan, gather, fold."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# Exposes the in-memory test doubles to downstream crates (pessimal_ffi's tests, the apps' previews)
+# without shipping them in a release build.
+testing = []
+
+[dependencies]
+pessimal_core = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
