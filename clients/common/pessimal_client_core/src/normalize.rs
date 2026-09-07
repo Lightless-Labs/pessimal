@@ -22,6 +22,7 @@
 //!
 //! Everything in this module is a pure function of its arguments. Nothing reads a clock.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -200,8 +201,20 @@ pub fn reduce(
 ///
 /// Matches on the exact instant, the same rule [`reduce`] uses, so the label can never name a
 /// series that did not produce the value. Pass the `at` of the reduced point the alert judged,
-/// not `now`. Ties go to the first series in slice order, which is the plan order
-/// `PollObservation::series_for` returns and therefore stable across polls.
+/// not `now`.
+///
+/// A tie is broken on the `attributes` map, never on the slice: the slice arrives in the order
+/// the backend happened to list the series in, which `TelemetryQuery::query_series` explicitly
+/// does not promise, so reading it would let a bind mount rename a firing alert on every poll
+/// with nothing underneath having changed. The attribute map is the only identity a series
+/// carries that is stable across polls, and it is `Ord`. Two series sharing one attribute map
+/// share a [`series_label`] too, so which of those wins is not observable.
+///
+/// A `NaN` sample is skipped rather than compared, for the same reason `combine`'s
+/// `f64::max`/`f64::min` ignore it: whenever any real sample shares the instant, the `NaN` does
+/// not survive into the reduced value, so it must not take the label off the series that did.
+/// A bucket where *every* series is `NaN` reduces to `NaN` and yields `None` here — no label,
+/// rather than a label picked out of a hat.
 #[must_use]
 pub fn dominant_at(
     series: &[MetricSeries],
@@ -213,11 +226,16 @@ pub fn dominant_at(
         let Some(point) = one.points().iter().find(|point| point.at == at) else {
             continue;
         };
+        if point.value.is_nan() {
+            continue;
+        }
         let wins = match best {
             None => true,
-            Some((_, incumbent)) => match reduction {
-                Reduction::Max => point.value > incumbent,
-                Reduction::Min => point.value < incumbent,
+            Some((incumbent, value)) => match point.value.partial_cmp(&value) {
+                Some(Ordering::Greater) => matches!(reduction, Reduction::Max),
+                Some(Ordering::Less) => matches!(reduction, Reduction::Min),
+                // `None` is unreachable — both values are non-`NaN` — so this arm is the tie.
+                Some(Ordering::Equal) | None => one.attributes < incumbent.attributes,
             },
         };
         if wins {
@@ -336,6 +354,12 @@ mod tests {
     fn mount(path: &str) -> BTreeMap<String, String> {
         let mut attributes = BTreeMap::new();
         attributes.insert(FILESYSTEM_MOUNTPOINT.to_owned(), path.to_owned());
+        attributes
+    }
+
+    fn interface(name: &str) -> BTreeMap<String, String> {
+        let mut attributes = BTreeMap::new();
+        attributes.insert(NETWORK_INTERFACE_NAME.to_owned(), name.to_owned());
         attributes
     }
 
@@ -546,6 +570,65 @@ mod tests {
             dominant_at(&mounts, at(60), Reduction::Max).is_none(),
             "no series holds a point at that instant"
         );
+    }
+
+    #[test]
+    fn a_tie_resolves_the_same_way_whatever_order_the_backend_listed_the_series() {
+        // A bind mount or a btrfs subvolume reports `/` and `/data` identically, every poll.
+        let root =
+            series(MetricKind::FilesystemUtilization, vec![(0, 0.95)]).with_attributes(mount("/"));
+        let data = series(MetricKind::FilesystemUtilization, vec![(0, 0.95)])
+            .with_attributes(mount("/data"));
+
+        let forward = dominant_at(&[root.clone(), data.clone()], at(0), Reduction::Max)
+            .and_then(series_label);
+        let reversed = dominant_at(&[data, root], at(0), Reduction::Max).and_then(series_label);
+        assert_eq!(
+            forward, reversed,
+            "the backend promises no order, so the label must not read one"
+        );
+        assert_eq!(
+            forward.as_deref(),
+            Some("/"),
+            "the lower attribute map wins, and keeps winning across polls"
+        );
+
+        // Worse under `Min`: every idle interface ties at a 0.0 rate, so the whole set is a tie.
+        let lo = series(MetricKind::NetworkIo, vec![(0, 0.0)]).with_attributes(interface("lo"));
+        let utun =
+            series(MetricKind::NetworkIo, vec![(0, 0.0)]).with_attributes(interface("utun0"));
+        let en0 = series(MetricKind::NetworkIo, vec![(0, 0.0)]).with_attributes(interface("en0"));
+
+        let one = dominant_at(
+            &[lo.clone(), utun.clone(), en0.clone()],
+            at(0),
+            Reduction::Min,
+        )
+        .and_then(series_label);
+        let two = dominant_at(&[en0, lo, utun], at(0), Reduction::Min).and_then(series_label);
+        assert_eq!(one, two);
+        assert_eq!(one.as_deref(), Some("en0"));
+    }
+
+    #[test]
+    fn a_nan_sample_never_takes_the_label_from_a_real_one() {
+        let broken = series(MetricKind::FilesystemUtilization, vec![(0, f64::NAN)])
+            .with_attributes(mount("/"));
+        let real = series(MetricKind::FilesystemUtilization, vec![(0, 0.95)])
+            .with_attributes(mount("/data"));
+
+        for reduction in [Reduction::Max, Reduction::Min] {
+            let forward = dominant_at(&[broken.clone(), real.clone()], at(0), reduction)
+                .and_then(series_label);
+            let reversed = dominant_at(&[real.clone(), broken.clone()], at(0), reduction)
+                .and_then(series_label);
+            assert_eq!(
+                forward,
+                Some("/data".to_owned()),
+                "`reduce` drops the NaN, so the label must not name the series that held it"
+            );
+            assert_eq!(forward, reversed);
+        }
     }
 
     #[test]
