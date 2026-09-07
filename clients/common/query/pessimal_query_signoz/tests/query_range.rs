@@ -587,6 +587,55 @@ async fn an_unreachable_endpoint_is_distinguished_from_a_backend_error() {
     );
 }
 
+#[tokio::test]
+async fn a_redirect_is_refused_rather_than_followed_to_another_host() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "https://evil.example/api/v5/query_range"),
+        )
+        .mount(&server)
+        .await;
+
+    // The key travels in a custom header, and reqwest only strips Authorization across hosts.
+    // Following this redirect would hand the credential to evil.example.
+    let error = adapter(&server)
+        .check_connection()
+        .await
+        .expect_err("should fail");
+    match error {
+        CoreError::Backend(message) => {
+            assert!(message.contains("evil.example"), "{message}");
+            assert!(message.contains("refusing to follow"), "{message}");
+        }
+        other => panic!("expected a backend error naming the redirect, got {other}"),
+    }
+}
+
+#[test]
+fn the_api_key_is_redacted_from_debug_output() {
+    let config = SignozConfig::new("https://eu.signoz.cloud", "super-secret-key").expect("valid");
+
+    // The obvious thing to do with a config that will not work is to log it.
+    let rendered = format!("{config:?}");
+    assert!(!rendered.contains("super-secret-key"), "{rendered}");
+    assert!(rendered.contains("redacted"), "{rendered}");
+    assert!(
+        rendered.contains("eu.signoz.cloud"),
+        "the rest must stay useful: {rendered}"
+    );
+
+    let adapter = SignozQuery::new(config).expect("client builds");
+    assert!(!format!("{adapter:?}").contains("super-secret-key"));
+}
+
+#[test]
+fn an_empty_api_key_is_rejected_at_construction() {
+    assert!(SignozConfig::new("https://eu.signoz.cloud", "").is_err());
+    assert!(SignozConfig::new("https://eu.signoz.cloud", "   ").is_err());
+}
+
 #[test]
 fn a_base_url_without_a_scheme_is_rejected_at_construction() {
     assert!(SignozConfig::new("eu.signoz.cloud", API_KEY).is_err());

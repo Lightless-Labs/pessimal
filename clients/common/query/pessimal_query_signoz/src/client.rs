@@ -1,5 +1,7 @@
 //! The SigNoz adapter.
 
+use std::fmt;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use pessimal_core::{
@@ -21,26 +23,39 @@ const API_KEY_HEADER: &str = "SIGNOZ-API-KEY";
 const QUERY_RANGE_PATH: &str = "/api/v5/query_range";
 const BACKEND_NAME: &str = "SigNoz";
 
+/// How much of a SigNoz error body to keep in a `CoreError`. Enough to name the problem, bounded
+/// so a proxy's HTML page does not become the error message.
+const MAX_ERROR_BODY: usize = 512;
+
 /// How to reach a SigNoz instance.
-#[derive(Debug, Clone)]
+///
+/// Fields are private: `base_url` is validated at construction and `api_key` is a credential, so
+/// neither should be reachable for assignment afterwards.
+#[derive(Clone)]
 pub struct SignozConfig {
-    /// Base URL, e.g. `https://eu.signoz.cloud`. The API path is appended.
-    pub base_url: String,
-    /// A service-account API key.
-    pub api_key: String,
-    /// Which naming convention this instance uses.
-    pub naming: MetricNaming,
-    /// How often the agents beat.
-    ///
-    /// This is the step `list_hosts` queries at, and it has to be this fine. A bucket's timestamp
-    /// is the *start* of its bucket, so querying a 30-minute window in one bucket would report
-    /// every host's last heartbeat as 30 minutes old and mark the whole fleet down.
-    pub heartbeat_interval: Duration,
+    base_url: String,
+    api_key: String,
+    naming: MetricNaming,
+    heartbeat_interval: Duration,
+}
+
+/// Redacted, because the obvious thing to do with a config that will not work is to log it — and
+/// `api_key` is a credential. `#[derive(Debug)]` here would put it in every log line and every
+/// error report that formats the adapter.
+impl fmt::Debug for SignozConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignozConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .field("naming", &self.naming)
+            .field("heartbeat_interval", &self.heartbeat_interval)
+            .finish()
+    }
 }
 
 impl SignozConfig {
     /// # Errors
-    /// Returns [`CoreError::Backend`] if the base URL has no scheme.
+    /// Returns [`CoreError::Backend`] if the base URL has no scheme, or if the API key is empty.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
         let base_url = base_url.into();
         if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
@@ -48,9 +63,16 @@ impl SignozConfig {
                 "SigNoz base URL {base_url:?} must start with http:// or https://"
             )));
         }
+        let api_key = api_key.into();
+        if api_key.trim().is_empty() {
+            return Err(CoreError::Backend(
+                "a SigNoz API key is required; create a service account under Settings → Service Accounts"
+                    .to_owned(),
+            ));
+        }
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
-            api_key: api_key.into(),
+            api_key,
             naming: MetricNaming::default(),
             // Taken from the domain's own default so the two cannot drift apart.
             heartbeat_interval: LivenessPolicy::default().heartbeat_interval(),
@@ -64,11 +86,27 @@ impl SignozConfig {
     }
 
     /// Overrides the assumed heartbeat interval. Must match what the agents are configured with,
-    /// or liveness will be measured against the wrong yardstick.
+    /// or liveness will be measured against the wrong yardstick — prefer
+    /// [`SignozConfig::for_policy`], which cannot disagree.
     #[must_use]
     pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
         self.heartbeat_interval = interval;
         self
+    }
+
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    #[must_use]
+    pub fn naming(&self) -> MetricNaming {
+        self.naming
+    }
+
+    #[must_use]
+    pub fn heartbeat_interval(&self) -> Duration {
+        self.heartbeat_interval
     }
 
     #[must_use]
@@ -78,6 +116,8 @@ impl SignozConfig {
 }
 
 /// Reads metrics back out of SigNoz.
+///
+/// `Debug` is safe to use: the config it holds redacts its API key.
 #[derive(Debug, Clone)]
 pub struct SignozQuery {
     config: SignozConfig,
@@ -90,8 +130,17 @@ impl SignozQuery {
     pub fn new(config: SignozConfig) -> Result<Self> {
         // Explicit, because `cargo test --workspace` unifies features and would otherwise
         // leave rustls enabled here, testing a different TLS stack than the one iOS ships.
+        // native-tls is explicit because `cargo test --workspace` unifies features and would
+        // otherwise leave rustls enabled here, testing a different TLS stack than the one iOS
+        // ships.
+        //
+        // Redirects are refused outright. The API key travels in a custom SIGNOZ-API-KEY header,
+        // and reqwest only strips `Authorization` across a host change — a custom header would be
+        // replayed to wherever the redirect points. A query API has no legitimate reason to
+        // redirect, so following one is all risk and no benefit.
         let http = Client::builder()
             .use_native_tls()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| {
                 CoreError::Backend(format!("could not build an HTTP client: {error}"))
@@ -126,10 +175,23 @@ impl SignozQuery {
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(CoreError::Unauthorized);
         }
+        if status.is_redirection() {
+            // Not followed, deliberately — see the client builder. Name the target, because an
+            // unfollowed 3xx from an API that never redirects is otherwise inexplicable.
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("an unnamed location")
+                .to_owned();
+            return Err(CoreError::Backend(format!(
+                "SigNoz redirected to {location}; refusing to follow, because the API key would be                  sent to the new host. Check the configured base URL."
+            )));
+        }
         if !status.is_success() {
             // The body usually says more than the status does; include a bounded slice of it.
             let body = response.text().await.unwrap_or_default();
-            let detail: String = body.chars().take(512).collect();
+            let detail: String = body.chars().take(MAX_ERROR_BODY).collect();
             return Err(CoreError::Backend(format!(
                 "SigNoz returned {status}: {detail}"
             )));
@@ -157,7 +219,7 @@ impl SignozQuery {
                 signal: "metrics",
                 step_interval: step.num_seconds().max(1),
                 aggregations: vec![Aggregation {
-                    metric_name: self.config.naming.metric_name(metric),
+                    metric_name: self.config.naming().metric_name(metric),
                     temporality: "Unspecified",
                     time_aggregation,
                     space_aggregation,
@@ -181,7 +243,7 @@ impl SignozQuery {
     /// [`HostSelector::AnyOf`] is different: it selects nothing, and is expressed as a filter that
     /// cannot match rather than as no filter at all.
     fn filter_for(&self, selector: &HostSelector) -> Option<Filter> {
-        let key = self.config.naming.attribute(HOST_NAME_ATTRIBUTE);
+        let key = self.config.naming().attribute(HOST_NAME_ATTRIBUTE);
         match selector {
             HostSelector::All => None,
             HostSelector::Host(host) => Some(Filter {
@@ -199,7 +261,7 @@ impl SignozQuery {
     /// Turns one returned series into a [`MetricSeries`], or `None` if it carries no host.
     fn to_metric_series(&self, metric: MetricKind, series: &TimeSeries) -> Option<MetricSeries> {
         let mut labels = series.label_map();
-        let host_key = self.config.naming.attribute(HOST_NAME_ATTRIBUTE);
+        let host_key = self.config.naming().attribute(HOST_NAME_ATTRIBUTE);
         let host = labels.remove(&host_key)?;
 
         let points: Vec<MetricPoint> = series
@@ -229,7 +291,7 @@ impl TelemetryQuery for SignozQuery {
         // The heartbeat is the one metric every agent emits unconditionally, so it is the
         // cheapest complete roll call. Grouping by os.type and service.version fills the rest of
         // the host record from the same round trip.
-        let naming = self.config.naming;
+        let naming = self.config.naming();
         let (time_aggregation, space_aggregation) = aggregation_for(MetricKind::AgentHeartbeat);
         let request = QueryRangeRequest::time_series(
             range.start().timestamp_millis(),
@@ -240,7 +302,7 @@ impl TelemetryQuery for SignozQuery {
                 // The heartbeat interval, not the window length. A bucket is timestamped at
                 // its start, so a coarse step would age every host by up to a full bucket and
                 // report a healthy fleet as down.
-                step_interval: self.config.heartbeat_interval.num_seconds().max(1),
+                step_interval: self.config.heartbeat_interval().num_seconds().max(1),
                 aggregations: vec![Aggregation {
                     metric_name: naming.metric_name(MetricKind::AgentHeartbeat),
                     temporality: "Unspecified",
