@@ -33,6 +33,7 @@ impl Liveness {
 
 /// The rule for turning heartbeat age into [`Liveness`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "LivenessPolicyWire")]
 pub struct LivenessPolicy {
     heartbeat_interval: Duration,
     stale_after_intervals: u32,
@@ -104,6 +105,31 @@ impl LivenessPolicy {
         } else {
             Liveness::Down
         }
+    }
+}
+
+/// The only shape [`LivenessPolicy`] deserialises through, so a persisted or synced value
+/// cannot bypass [`LivenessPolicy::new`].
+///
+/// Without this, restoring `{stale_after_intervals: 9, down_after_intervals: 1}` from disk yields a
+/// policy that calls a host down before it calls it stale — the liveness model inverted, with no
+/// error anywhere.
+#[derive(Deserialize)]
+struct LivenessPolicyWire {
+    heartbeat_interval: Duration,
+    stale_after_intervals: u32,
+    down_after_intervals: u32,
+}
+
+impl TryFrom<LivenessPolicyWire> for LivenessPolicy {
+    type Error = CoreError;
+
+    fn try_from(wire: LivenessPolicyWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.heartbeat_interval,
+            wire.stale_after_intervals,
+            wire.down_after_intervals,
+        )
     }
 }
 

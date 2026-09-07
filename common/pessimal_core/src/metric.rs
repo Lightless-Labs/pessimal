@@ -178,6 +178,7 @@ impl fmt::Display for MetricKind {
 
 /// A half-open query window, `start..end`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "TimeRangeWire")]
 pub struct TimeRange {
     start: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -229,6 +230,22 @@ impl TimeRange {
     }
 }
 
+/// The only shape [`TimeRange`] deserialises through, so a persisted range cannot arrive with its
+/// end before its start.
+#[derive(Deserialize)]
+struct TimeRangeWire {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+}
+
+impl TryFrom<TimeRangeWire> for TimeRange {
+    type Error = CoreError;
+
+    fn try_from(wire: TimeRangeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.start, wire.end)
+    }
+}
+
 /// One observation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MetricPoint {
@@ -245,6 +262,7 @@ impl MetricPoint {
 
 /// A metric's values for one host over a window, oldest point first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MetricSeriesWire")]
 pub struct MetricSeries {
     pub host: HostId,
     pub kind: MetricKind,
@@ -340,6 +358,29 @@ impl MetricSeries {
             .fold(None, |acc: Option<f64>, v| {
                 Some(acc.map_or(v, |a| a.min(v)))
             })
+    }
+}
+
+/// The only shape [`MetricSeries`] deserialises through, so restored points are sorted by the
+/// same code that sorts constructed ones.
+///
+/// The sort is not cosmetic: [`MetricSeries::latest`] reads the last element and
+/// [`MetricSeries::latest_at`] scans backwards, so an unsorted restore does not fail — it silently
+/// returns the wrong sample, and that sample is what alert evaluation judges.
+#[derive(Deserialize)]
+struct MetricSeriesWire {
+    host: HostId,
+    kind: MetricKind,
+    #[serde(default)]
+    attributes: BTreeMap<String, String>,
+    points: Vec<MetricPoint>,
+}
+
+impl TryFrom<MetricSeriesWire> for MetricSeries {
+    type Error = CoreError;
+
+    fn try_from(wire: MetricSeriesWire) -> Result<Self, Self::Error> {
+        Ok(Self::new(wire.host, wire.kind, wire.points).with_attributes(wire.attributes))
     }
 }
 

@@ -47,6 +47,7 @@ impl Comparator {
 
 /// A user-configured alert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "AlertRuleWire")]
 pub struct AlertRule {
     id: Urn,
     pub name: String,
@@ -136,6 +137,44 @@ impl AlertRule {
             self.threshold,
             self.for_duration.num_seconds()
         )
+    }
+}
+
+/// The only shape [`AlertRule`] deserialises through, so a persisted rule is held to the same
+/// invariants [`AlertRule::new`] enforces.
+///
+/// The id is carried through rather than minted: a restored rule is the same rule, and a fresh id
+/// would orphan every alert evaluation keyed to it.
+#[derive(Deserialize)]
+struct AlertRuleWire {
+    id: Urn,
+    name: String,
+    metric: MetricKind,
+    selector: HostSelector,
+    comparator: Comparator,
+    threshold: f64,
+    for_duration: Duration,
+    enabled: bool,
+}
+
+impl TryFrom<AlertRuleWire> for AlertRule {
+    type Error = CoreError;
+
+    fn try_from(wire: AlertRuleWire) -> Result<Self, Self::Error> {
+        let validated = Self::new(
+            wire.id.environment(),
+            wire.name,
+            wire.metric,
+            wire.comparator,
+            wire.threshold,
+            wire.for_duration,
+        )?;
+        Ok(Self {
+            id: wire.id,
+            selector: wire.selector,
+            enabled: wire.enabled,
+            ..validated
+        })
     }
 }
 

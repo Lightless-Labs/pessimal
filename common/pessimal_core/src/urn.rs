@@ -21,6 +21,7 @@ const SEGMENT_COUNT: usize = 5;
 
 /// A parsed Pessimal URN.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "UrnWire")]
 pub struct Urn {
     prefix: String,
     environment: String,
@@ -101,6 +102,31 @@ impl Urn {
     #[must_use]
     pub fn id(&self) -> Uuid {
         self.id
+    }
+}
+
+/// The only shape [`Urn`] deserialises through, so a restored URN cannot carry an empty segment
+/// or one containing the separator — either of which makes it unparseable from its own `Display`.
+#[derive(Deserialize)]
+struct UrnWire {
+    prefix: String,
+    environment: String,
+    service: String,
+    model: String,
+    id: Uuid,
+}
+
+impl TryFrom<UrnWire> for Urn {
+    type Error = CoreError;
+
+    fn try_from(wire: UrnWire) -> Result<Self, Self::Error> {
+        Self::with_prefix(
+            &wire.prefix,
+            &wire.environment,
+            &wire.service,
+            &wire.model,
+            wire.id,
+        )
     }
 }
 
