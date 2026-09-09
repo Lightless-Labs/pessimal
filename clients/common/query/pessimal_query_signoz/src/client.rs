@@ -13,10 +13,11 @@ use reqwest::{Client, StatusCode};
 
 use crate::naming::{
     HOST_NAME_ATTRIBUTE, MetricNaming, OS_TYPE_ATTRIBUTE, SERVICE_VERSION_ATTRIBUTE,
-    aggregation_for,
+    aggregation_for, temporality_for,
 };
 use crate::wire::{
-    Aggregation, BuilderSpec, Filter, GroupByKey, QueryRangeRequest, QueryRangeResponse, TimeSeries,
+    Aggregation, AggregationBucket, BuilderSpec, Filter, GroupByKey, QueryRangeEnvelope,
+    QueryRangeRequest, TimeSeries, TimeSeriesData,
 };
 
 /// The API key header. Not `Authorization`.
@@ -200,7 +201,7 @@ impl SignozQuery {
         Self { config, http }
     }
 
-    async fn post(&self, request: &QueryRangeRequest) -> Result<QueryRangeResponse> {
+    async fn post(&self, request: &QueryRangeRequest) -> Result<QueryRangeEnvelope> {
         let response = self
             .http
             .post(self.config.query_range_url())
@@ -242,9 +243,17 @@ impl SignozQuery {
             )));
         }
 
-        response.json().await.map_err(|error| {
+        let envelope: QueryRangeEnvelope = response.json().await.map_err(|error| {
             CoreError::Backend(format!("could not parse the SigNoz response: {error}"))
-        })
+        })?;
+        if !envelope.is_success() {
+            // A non-success status inside a 200 body would otherwise read as an empty fleet.
+            return Err(CoreError::Backend(format!(
+                "SigNoz reported status {:?}",
+                envelope.status
+            )));
+        }
+        Ok(envelope)
     }
 
     /// Builds the query body for one metric over one window.
@@ -265,7 +274,7 @@ impl SignozQuery {
                 step_interval: step.num_seconds().max(1),
                 aggregations: vec![Aggregation {
                     metric_name: self.config.naming().metric_name(metric),
-                    temporality: "Unspecified",
+                    temporality: temporality_for(metric),
                     time_aggregation,
                     space_aggregation,
                 }],
@@ -310,7 +319,7 @@ impl SignozQuery {
         let host = labels.remove(&host_key)?;
 
         let points: Vec<MetricPoint> = series
-            .values
+            .values()
             .iter()
             // A partial bucket does not cover its whole step; SigNoz says to ignore it, and
             // charting one puts a misleading dip at the edge of every window.
@@ -350,7 +359,7 @@ impl TelemetryQuery for SignozQuery {
                 step_interval: self.config.heartbeat_interval().num_seconds().max(1),
                 aggregations: vec![Aggregation {
                     metric_name: naming.metric_name(MetricKind::AgentHeartbeat),
-                    temporality: "Unspecified",
+                    temporality: temporality_for(MetricKind::AgentHeartbeat),
                     time_aggregation,
                     space_aggregation,
                 }],
@@ -377,10 +386,11 @@ impl TelemetryQuery for SignozQuery {
         let mut hosts: Vec<Host> = Vec::new();
         for series in response
             .data
-            .results
+            .data
+            .results()
             .iter()
-            .flat_map(|result| result.aggregations.iter())
-            .flat_map(|bucket| bucket.series.iter())
+            .flat_map(TimeSeriesData::aggregations)
+            .flat_map(AggregationBucket::series)
         {
             let labels = series.label_map();
             let Some(name) = labels.get(&host_key) else {
@@ -397,7 +407,7 @@ impl TelemetryQuery for SignozQuery {
             // A partial bucket would report a heartbeat later than the one actually recorded, which
             // would make a stale host look alive.
             if let Some(latest) = series
-                .values
+                .values()
                 .iter()
                 .filter(|value| !value.partial && value.value.as_finite().is_some())
                 .filter_map(|value| DateTime::from_timestamp_millis(value.timestamp))
@@ -434,10 +444,11 @@ impl TelemetryQuery for SignozQuery {
 
         Ok(response
             .data
-            .results
+            .data
+            .results()
             .iter()
-            .flat_map(|result| result.aggregations.iter())
-            .flat_map(|bucket| bucket.series.iter())
+            .flat_map(TimeSeriesData::aggregations)
+            .flat_map(AggregationBucket::series)
             .filter_map(|series| self.to_metric_series(request.metric, series))
             .collect())
     }

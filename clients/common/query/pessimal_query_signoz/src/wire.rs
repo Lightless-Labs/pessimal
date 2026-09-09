@@ -94,9 +94,37 @@ pub struct GroupByKey {
 // Response
 // ---------------------------------------------------------------------------
 
+/// The HTTP response envelope.
+///
+/// SigNoz's Go `QueryRangeResponse` — the type this module was first written against — is the
+/// *inner* object. The handler wraps it again: `{status, data: {type, meta, data: {results}}}`.
+/// Parsing the inner type directly against a live instance does not fail; it yields an empty result
+/// set, because `results` defaults. That is why a mock built from the Go types agreed with the code
+/// and both were wrong: only a real response has the outer layer.
+///
+/// `data` is deliberately required. If the envelope changes again, that must surface as a parse
+/// error rather than as a fleet that appears to have no hosts.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QueryRangeEnvelope {
+    #[serde(default)]
+    pub status: String,
+    pub data: QueryRangeResponse,
+}
+
+impl QueryRangeEnvelope {
+    /// Whether the backend reported success. Anything else is an error, not an empty fleet.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        // An older build, or a proxy, may omit the field entirely; absence is not failure.
+        self.status.is_empty() || self.status.eq_ignore_ascii_case("success")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct QueryRangeResponse {
-    #[serde(default)]
+    /// Required, not defaulted. Tolerating its absence is exactly what let the inner-shape parser
+    /// succeed against a live instance and report an empty fleet: every field being optional means
+    /// a wrong shape is indistinguishable from no data.
     pub data: QueryData,
 }
 
@@ -104,37 +132,75 @@ pub struct QueryRangeResponse {
 pub struct QueryData {
     /// Heterogeneous by request type. Only `time_series` shapes are requested, so anything that
     /// does not parse as one is skipped rather than failing the whole response.
+    ///
+    /// `Option` because the field arrives as an explicit `null`, not merely absent, when a query
+    /// matched nothing — and `#[serde(default)]` does not cover an explicit null for a `Vec`.
     #[serde(default)]
-    pub results: Vec<TimeSeriesData>,
+    results: Option<Vec<TimeSeriesData>>,
+}
+
+impl QueryData {
+    #[must_use]
+    pub fn results(&self) -> &[TimeSeriesData] {
+        self.results.as_deref().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimeSeriesData {
     #[serde(rename = "queryName", default)]
     pub query_name: String,
+    /// Explicitly `null` when the query matched no series — which is what a temporality mismatch
+    /// looks like, so this is a routine shape rather than an edge case.
     #[serde(default)]
-    pub aggregations: Vec<AggregationBucket>,
+    aggregations: Option<Vec<AggregationBucket>>,
+}
+
+impl TimeSeriesData {
+    #[must_use]
+    pub fn aggregations(&self) -> &[AggregationBucket] {
+        self.aggregations.as_deref().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AggregationBucket {
     #[serde(default)]
-    pub series: Vec<TimeSeries>,
+    series: Option<Vec<TimeSeries>>,
+}
+
+impl AggregationBucket {
+    #[must_use]
+    pub fn series(&self) -> &[TimeSeries] {
+        self.series.as_deref().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimeSeries {
     #[serde(default)]
-    pub labels: Vec<Label>,
+    labels: Option<Vec<Label>>,
     #[serde(default)]
-    pub values: Vec<TimeSeriesValue>,
+    values: Option<Vec<TimeSeriesValue>>,
+}
+
+impl TimeSeries {
+    #[must_use]
+    pub fn labels(&self) -> &[Label] {
+        self.labels.as_deref().unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn values(&self) -> &[TimeSeriesValue] {
+        self.values.as_deref().unwrap_or_default()
+    }
 }
 
 impl TimeSeries {
     /// The series' labels flattened to a plain map, dropping any whose value is not a scalar.
     #[must_use]
     pub fn label_map(&self) -> BTreeMap<String, String> {
-        self.labels
+        self.labels()
             .iter()
             .filter_map(|label| {
                 label
@@ -240,42 +306,88 @@ impl SampleValue {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_a_time_series_response() {
-        let response: QueryRangeResponse = serde_json::from_str(
-            r#"{
-              "type": "time_series",
-              "data": {
-                "results": [{
-                  "queryName": "A",
-                  "aggregations": [{
-                    "index": 0,
-                    "alias": "",
-                    "meta": {"unit": "1"},
-                    "series": [{
-                      "labels": [
-                        {"key": {"name": "host.name", "signal": "", "fieldContext": "", "fieldDataType": ""}, "value": "web-1"}
-                      ],
-                      "values": [
-                        {"timestamp": 1742602572000, "value": 0.21},
-                        {"timestamp": 1742602632000, "value": 0.34}
-                      ]
-                    }]
-                  }]
-                }]
-              },
-              "meta": {}
-            }"#,
+    /// The real envelope, captured verbatim from a live SigNoz Cloud instance on 2026-09-09.
+    /// Host name and values are synthetic; the SHAPE is what matters and it is exactly as returned.
+    ///
+    /// Note the double nesting — `data.data.results` — and that `labels[].key` is an object. An
+    /// earlier version of these fixtures was written from SigNoz's Go `QueryRangeResponse`, which
+    /// is only the inner half, so the fixtures and the parser agreed with each other and both
+    /// disagreed with the server.
+    fn live_envelope(series: &str) -> String {
+        format!(
+            r#"{{
+              "status": "success",
+              "data": {{
+                "type": "time_series",
+                "meta": {{"rowsScanned": 2001, "bytesScanned": 50912, "durationMs": 30}},
+                "data": {{"results": [{{"queryName": "A", "aggregations": [
+                  {{"index": 0, "alias": "", "series": [{series}]}}
+                ]}}]}}
+              }}
+            }}"#
         )
-        .expect("parses");
+    }
 
-        let series = &response.data.results[0].aggregations[0].series[0];
+    #[test]
+    fn parses_the_real_response_envelope() {
+        let body = live_envelope(
+            r#"{"labels": [{"key": {"name": "host.name", "signal": "", "fieldContext": "", "fieldDataType": ""}, "value": "web-1"}],
+                "values": [{"timestamp": 1788940740000, "value": 0.0649},
+                           {"timestamp": 1788940800000, "value": 0.34}]}"#,
+        );
+        let envelope: QueryRangeEnvelope = serde_json::from_str(&body).expect("parses");
+        assert!(envelope.is_success());
+
+        let results = envelope.data.data.results();
+        let series = &results[0].aggregations()[0].series()[0];
         assert_eq!(
             series.label_map().get("host.name").map(String::as_str),
             Some("web-1")
         );
-        assert_eq!(series.values.len(), 2);
-        assert_eq!(series.values[0].value.as_finite(), Some(0.21));
+        assert_eq!(series.values().len(), 2);
+        assert_eq!(series.values()[0].value.as_finite(), Some(0.0649));
+    }
+
+    #[test]
+    fn the_inner_shape_alone_is_rejected_rather_than_read_as_an_empty_fleet() {
+        // This is the bug these fixtures used to encode: the inner object parsed happily and
+        // yielded zero series, so a live instance looked like a fleet with no hosts.
+        let inner = r#"{"type":"time_series","data":{"results":[]},"meta":{}}"#;
+        assert!(
+            serde_json::from_str::<QueryRangeEnvelope>(inner).is_err(),
+            "an envelope without its outer `data` must fail loudly, not parse to empty"
+        );
+    }
+
+    #[test]
+    fn a_non_success_status_is_not_an_empty_fleet() {
+        let body = r#"{"status":"error","data":{"type":"time_series","data":{"results":null}}}"#;
+        let envelope: QueryRangeEnvelope = serde_json::from_str(body).expect("parses");
+        assert!(!envelope.is_success());
+    }
+
+    #[test]
+    fn an_absent_status_is_treated_as_success() {
+        let body = r#"{"data":{"type":"time_series","data":{"results":null}}}"#;
+        let envelope: QueryRangeEnvelope = serde_json::from_str(body).expect("parses");
+        assert!(
+            envelope.is_success(),
+            "a proxy may strip it; absence is not failure"
+        );
+    }
+
+    #[test]
+    fn null_results_and_null_aggregations_are_empty_not_errors() {
+        // Exactly what a temporality mismatch returns, so it is a routine shape.
+        let body = r#"{"status":"success","data":{"type":"time_series","data":{"results":
+            [{"queryName":"A","aggregations":null}]}}}"#;
+        let envelope: QueryRangeEnvelope = serde_json::from_str(body).expect("parses");
+        assert_eq!(envelope.data.data.results().len(), 1);
+        assert!(envelope.data.data.results()[0].aggregations().is_empty());
+
+        let body = r#"{"status":"success","data":{"type":"time_series","data":{"results":null}}}"#;
+        let envelope: QueryRangeEnvelope = serde_json::from_str(body).expect("parses");
+        assert!(envelope.data.data.results().is_empty());
     }
 
     #[test]
@@ -284,7 +396,7 @@ mod tests {
             r#"{"labels": [{"key": {"name": "os.type"}, "value": "linux"}], "values": []}"#,
         )
         .expect("parses");
-        assert_eq!(series.labels[0].key.name, "os.type");
+        assert_eq!(series.labels()[0].key.name, "os.type");
     }
 
     #[test]
@@ -328,21 +440,6 @@ mod tests {
         let labels = series.label_map();
         assert_eq!(labels.get("port").map(String::as_str), Some("8080"));
         assert_eq!(labels.get("tls").map(String::as_str), Some("true"));
-    }
-
-    #[test]
-    fn an_empty_result_set_is_not_an_error() {
-        let response: QueryRangeResponse =
-            serde_json::from_str(r#"{"type":"time_series","data":{"results":[]},"meta":{}}"#)
-                .expect("parses");
-        assert!(response.data.results.is_empty());
-    }
-
-    #[test]
-    fn a_response_missing_optional_sections_still_parses() {
-        let response: QueryRangeResponse = serde_json::from_str(r#"{"type":"time_series"}"#)
-            .expect("a missing data block must not be fatal");
-        assert!(response.data.results.is_empty());
     }
 
     #[test]

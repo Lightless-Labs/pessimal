@@ -37,13 +37,23 @@ fn series(labels: &[(&str, Value)], values: &[Value]) -> Value {
     })
 }
 
+/// The real HTTP envelope, as a live SigNoz returns it: `{status, data: {type, meta, data:
+/// {results}}}`.
+///
+/// These fixtures were originally written against SigNoz's Go `QueryRangeResponse`, which is only
+/// the inner half. The parser was written from the same source, so fixtures and parser agreed with
+/// each other and both disagreed with the server — every live query returned zero series, silently.
+/// Getting the envelope right here is what makes these tests mean anything.
 fn response(series: &[Value]) -> Value {
     json!({
-        "type": "time_series",
-        "data": {"results": [{"queryName": "A", "aggregations": [{
-            "index": 0, "alias": "", "meta": {}, "series": series
-        }]}]},
-        "meta": {}
+        "status": "success",
+        "data": {
+            "type": "time_series",
+            "meta": {"rowsScanned": 0, "bytesScanned": 0, "durationMs": 1},
+            "data": {"results": [{"queryName": "A", "aggregations": [{
+                "index": 0, "alias": "", "meta": {}, "series": series
+            }]}]}
+        }
     })
 }
 
