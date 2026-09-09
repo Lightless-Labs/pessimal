@@ -65,6 +65,17 @@ const PRESET_FORGET_HOST_AFTER_HOURS: i64 = 24;
 /// otherwise accumulates a day of ghosts, each carrying an evaluation per rule.
 const PRESET_MAX_RETAINED_HOSTS: u32 = 256;
 
+/// The ingestion lag the preset budgets for: three minutes.
+///
+/// Deliberately loose. Measured against SigNoz Cloud, the newest *queryable* heartbeat was 88
+/// seconds behind wall clock while the agent was still exporting every five seconds; three minutes
+/// is about twice that, and about 1.5 times that plus a whole 30-second bucket. A tight fit around
+/// the measurement would turn one slow afternoon at the backend into a fleet-wide false alarm,
+/// while the only cost of being generous is that a host which really dies is called `Down` three
+/// minutes later than the liveness policy alone would call it — and no allowance can beat the
+/// backend to a fact it has not ingested yet.
+const PRESET_BACKEND_LAG_ALLOWANCE_MINUTES: i64 = 3;
+
 /// The absolute ceiling every duration in a [`PollTuning`] must satisfy: one year.
 ///
 /// The bound exists to keep `now ± window` from overflowing, not to police UX. Every other
@@ -78,7 +89,8 @@ const PRESET_MAX_RETAINED_HOSTS: u32 = 256;
 /// this is the layer that says no while the value is still a setting rather than a query.
 ///
 /// A year is generous rather than tuned — the preset's longest duration is `forget_host_after` at
-/// 24 hours — and it leaves every derived window (at most about three times the largest field)
+/// 24 hours — and it leaves every derived window (at most about four times the largest field, now
+/// that the roster and detail windows carry the lag allowance too)
 /// five orders of magnitude below the overflow threshold.
 pub const MAX_TUNING_DURATION: Duration = Duration::days(365);
 
@@ -121,6 +133,7 @@ pub struct PollTuning {
     metric_step: Duration,
     chart_window: Duration,
     max_staleness: Duration,
+    backend_lag_allowance: Duration,
     forget_host_after: Duration,
     max_retained_hosts: u32,
 }
@@ -133,6 +146,7 @@ impl PollTuning {
     /// bucket is already `[step, 2*step)` old before poll latency);
     /// `max_staleness <= liveness.down_threshold()` (an alert must not outlive liveness);
     /// `chart_window >= max_staleness + metric_step`;
+    /// `backend_lag_allowance >= 0` (it is a delay the backend imposes, never a head start);
     /// `forget_host_after >= liveness.down_threshold()`;
     /// `staleness_tolerance() <= freshness_budget()` (so the freshness ladder cannot invert);
     /// `max_retained_hosts >= 1`; every duration, the policy's derived thresholds included, at or
@@ -141,12 +155,19 @@ impl PollTuning {
     /// `liveness.stale_threshold() < liveness.down_threshold()`, and
     /// `liveness.stale_threshold() >= 3 * liveness.heartbeat_interval()`, which is the only way
     /// to check the documented `stale_after_intervals >= 3` given the multipliers are private.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "eight interlocked durations, and the interlocks are the point: a builder with \
+                  per-field setters would let a caller hold a half-valid tuning, which is exactly \
+                  what the one fallible constructor exists to prevent"
+    )]
     pub fn new(
         liveness: LivenessPolicy,
         poll_interval: Duration,
         metric_step: Duration,
         chart_window: Duration,
         max_staleness: Duration,
+        backend_lag_allowance: Duration,
         forget_host_after: Duration,
         max_retained_hosts: u32,
     ) -> Result<Self> {
@@ -156,6 +177,7 @@ impl PollTuning {
             metric_step,
             chart_window,
             max_staleness,
+            backend_lag_allowance,
             forget_host_after,
             max_retained_hosts,
         };
@@ -165,7 +187,8 @@ impl PollTuning {
 
     /// The preset that satisfies every interlock: `poll_interval` and `metric_step` =
     /// `heartbeat_interval()`, `max_staleness` = `down_threshold()`, `chart_window` = 1 hour,
-    /// `forget_host_after` = 24 hours, `max_retained_hosts` = 256.
+    /// `backend_lag_allowance` = 3 minutes, `forget_host_after` = 24 hours,
+    /// `max_retained_hosts` = 256.
     ///
     /// Infallible by design — this is the value a client falls back to, and a panic or an error
     /// here would be a monitoring app that refuses to start. The formulas hold for any policy a
@@ -183,6 +206,7 @@ impl PollTuning {
             metric_step: interval,
             chart_window: Duration::hours(PRESET_CHART_WINDOW_HOURS),
             max_staleness: liveness.down_threshold(),
+            backend_lag_allowance: Duration::minutes(PRESET_BACKEND_LAG_ALLOWANCE_MINUTES),
             forget_host_after: Duration::hours(PRESET_FORGET_HOST_AFTER_HOURS),
             max_retained_hosts: PRESET_MAX_RETAINED_HOSTS,
         }
@@ -222,6 +246,34 @@ impl PollTuning {
         self.max_staleness
     }
 
+    /// How far behind wall clock the backend's newest *queryable* point is assumed to be.
+    ///
+    /// A measured property of the read path, not a preference. With an agent exporting every five
+    /// seconds and still running, the newest queryable heartbeat on SigNoz Cloud was 88 seconds
+    /// behind wall clock: part of that is bucket quantisation — a bucket is stamped at its start —
+    /// and most of it is the backend's own ingestion-to-queryable delay. Every columnar metrics
+    /// backend batches on write, so every one of them has some version of this number. `now` is
+    /// simply not an instant a poll can observe, and the two places that used to assume it was
+    /// both reported a healthy fleet as a broken one.
+    ///
+    /// **This is the one tuning value an operator may genuinely need to raise**, because it
+    /// describes their backend rather than their preference. Too low shows up two ways, both of
+    /// them a lie about the fleet: hosts that are beating perfectly read `Stale` and drift toward
+    /// `Down` (their newest heartbeat is older than the policy's threshold purely because of the
+    /// lag), or the roster comes back empty and the fleet reads as *absent* rather than as late
+    /// (`list_hosts` asks for a window the newest data has not landed in yet). Either symptom,
+    /// fleet-wide and all at once rather than host by host, means this value is below the lag the
+    /// backend actually has.
+    ///
+    /// Raising it costs detection latency and nothing else: a host that really dies is called
+    /// `Down` this much later than [`LivenessPolicy`] alone would call it. Zero is correct only
+    /// for a collector on loopback, which has effectively no lag — and which is precisely why
+    /// neither failure was visible before the first poll of a real backend.
+    #[must_use]
+    pub fn backend_lag_allowance(&self) -> Duration {
+        self.backend_lag_allowance
+    }
+
     #[must_use]
     pub fn forget_host_after(&self) -> Duration {
         self.forget_host_after
@@ -232,17 +284,42 @@ impl PollTuning {
         self.max_retained_hosts
     }
 
-    /// `down_threshold() + 2 * heartbeat_interval()` — a Down host must still be listed.
+    /// `down_threshold() + 2 * heartbeat_interval() + backend_lag_allowance()` — a Down host must
+    /// still be listed, and the newest data the backend holds must sit comfortably inside the
+    /// window rather than at its edge.
     ///
     /// Derived, not supplied, so it cannot be set shorter than the age at which liveness would
     /// call a host down; that combination makes a silent host vanish from the roster at exactly
     /// the moment an operator needs to see it.
+    ///
+    /// The lag term answers a second, sharper failure. The window ends at `now`, so without it the
+    /// whole span is *behind* the newest queryable bucket by most of the backend's ingestion lag,
+    /// and the newest heartbeat sits at the far edge — intermittently outside. `list_hosts` then
+    /// returns nothing at all and the fleet reads as absent rather than as late, which is the one
+    /// reading worse than a stale one. Observed directly against SigNoz Cloud: a 30-minute window
+    /// found the host, the derived window found nothing, over identical data.
     #[must_use]
     pub fn host_window(&self) -> Duration {
         summed(
-            self.liveness.down_threshold(),
-            scaled(self.liveness.heartbeat_interval(), 2),
+            summed(
+                self.liveness.down_threshold(),
+                scaled(self.liveness.heartbeat_interval(), 2),
+            ),
+            self.backend_lag_allowance,
         )
+    }
+
+    /// `chart_window() + backend_lag_allowance()` — the span a focused host's detail queries ask
+    /// for.
+    ///
+    /// [`PollTuning::chart_window`] is how much history the chart should *show*; this is what has
+    /// to be requested to get it. The request ends at `now`, and the most recent
+    /// `backend_lag_allowance` of that span is still somewhere inside the backend, so asking for
+    /// exactly the charted span yields a chart that is short by the lag at the live end — the end
+    /// an operator is actually looking at.
+    #[must_use]
+    pub fn detail_window(&self) -> Duration {
+        summed(self.chart_window, self.backend_lag_allowance)
     }
 
     /// `max_staleness() + 2 * metric_step()` — about seven buckets at defaults.
@@ -276,8 +353,8 @@ impl PollTuning {
         scaled(self.poll_interval, 2_i32.pow(doublings)).min(ceiling)
     }
 
-    /// Every interlock, in one place so `new` and the wire type cannot drift apart.
-    fn check(&self) -> Result<()> {
+    /// The absolute bound on every duration, checked before anything relative.
+    fn check_ceilings(&self) -> Result<()> {
         // The absolute ceiling before anything else, because every interlock below derives a sum,
         // a multiple, or a threshold from these fields, and none of those mean anything once an
         // operand has run away. `Duration::MAX` — what `scaled` and `summed` settle on — is
@@ -295,6 +372,7 @@ impl PollTuning {
             ("metric step", self.metric_step),
             ("chart window", self.chart_window),
             ("max staleness", self.max_staleness),
+            ("backend lag allowance", self.backend_lag_allowance),
             ("forget-host-after", self.forget_host_after),
         ] {
             if value > MAX_TUNING_DURATION {
@@ -306,7 +384,11 @@ impl PollTuning {
                 )));
             }
         }
+        Ok(())
+    }
 
+    /// The embedded policy, checked before the fields measured against its thresholds.
+    fn check_liveness(&self) -> Result<()> {
         // The policy first: everything below is measured against its thresholds, so a broken
         // policy would otherwise surface as a confusing complaint about some other field.
         //
@@ -340,6 +422,18 @@ impl PollTuning {
                 three_beats.num_seconds()
             )));
         }
+        Ok(())
+    }
+
+    /// Every interlock, in one place so `new` and the wire type cannot drift apart.
+    ///
+    /// Three functions rather than one only because the list no longer fits on a screen; `check`
+    /// stays the single entry point, and the order is load-bearing — the ceilings before anything
+    /// derived from a runaway operand, the embedded policy before the fields measured against its
+    /// thresholds.
+    fn check(&self) -> Result<()> {
+        self.check_ceilings()?;
+        self.check_liveness()?;
 
         if self.poll_interval <= Duration::zero() {
             return Err(ClientError::InvalidTuning(format!(
@@ -377,6 +471,15 @@ impl PollTuning {
                 "chart window {}s must cover max staleness plus a step ({}s)",
                 self.chart_window.num_seconds(),
                 chart_floor.num_seconds()
+            )));
+        }
+        if self.backend_lag_allowance < Duration::zero() {
+            return Err(ClientError::InvalidTuning(format!(
+                "backend lag allowance {}s must not be negative; it is how far behind wall clock \
+                 the backend's newest queryable point lags, and a negative one would judge \
+                 liveness against an instant not even the clock has reached while narrowing the \
+                 very windows it exists to widen",
+                self.backend_lag_allowance.num_seconds()
             )));
         }
         if self.forget_host_after < self.liveness.down_threshold() {
@@ -427,6 +530,7 @@ struct PollTuningWire {
     metric_step: Duration,
     chart_window: Duration,
     max_staleness: Duration,
+    backend_lag_allowance: Duration,
     forget_host_after: Duration,
     max_retained_hosts: u32,
 }
@@ -441,6 +545,7 @@ impl TryFrom<PollTuningWire> for PollTuning {
             wire.metric_step,
             wire.chart_window,
             wire.max_staleness,
+            wire.backend_lag_allowance,
             wire.forget_host_after,
             wire.max_retained_hosts,
         )
@@ -455,6 +560,7 @@ impl From<PollTuning> for PollTuningWire {
             metric_step,
             chart_window,
             max_staleness,
+            backend_lag_allowance,
             forget_host_after,
             max_retained_hosts,
         } = tuning;
@@ -464,6 +570,7 @@ impl From<PollTuning> for PollTuningWire {
             metric_step,
             chart_window,
             max_staleness,
+            backend_lag_allowance,
             forget_host_after,
             max_retained_hosts,
         }
@@ -738,12 +845,20 @@ mod tests {
             preset.metric_step(),
             preset.chart_window(),
             preset.max_staleness(),
+            preset.backend_lag_allowance(),
             preset.forget_host_after(),
             preset.max_retained_hosts(),
         )
         .expect("the preset must pass the constructor that guards it");
 
         assert_eq!(revalidated, preset);
+        assert_eq!(
+            preset.backend_lag_allowance(),
+            secs(180),
+            "the preset budgets three minutes of ingestion lag: about twice the 88 seconds \
+             measured against SigNoz Cloud, because a tight fit around the measurement turns one \
+             slow afternoon at the backend into a fleet-wide false alarm"
+        );
     }
 
     #[test]
@@ -765,6 +880,7 @@ mod tests {
             secs(30),
             hours(1),
             secs(60),
+            secs(180),
             hours(24),
             256,
         );
@@ -781,6 +897,7 @@ mod tests {
             secs(30),
             hours(1),
             secs(200),
+            secs(180),
             hours(24),
             256,
         );
@@ -797,6 +914,7 @@ mod tests {
             secs(30),
             secs(150),
             secs(150),
+            secs(180),
             hours(24),
             256,
         );
@@ -831,6 +949,7 @@ mod tests {
             secs(30),
             hours(1),
             secs(150),
+            secs(180),
             hours(24),
             256,
         );
@@ -848,6 +967,7 @@ mod tests {
             secs(30),
             hours(1),
             secs(150),
+            secs(180),
             hours(24),
             256,
         );
@@ -867,6 +987,7 @@ mod tests {
             secs(30),
             beyond,
             secs(150),
+            secs(180),
             hours(24),
             256,
         );
@@ -880,6 +1001,7 @@ mod tests {
             secs(30),
             MAX_TUNING_DURATION,
             secs(150),
+            MAX_TUNING_DURATION,
             MAX_TUNING_DURATION,
             256,
         );
@@ -900,6 +1022,7 @@ mod tests {
             secs(30),
             hours(1),
             secs(150),
+            secs(180),
             hours(24),
             256,
         );
@@ -922,6 +1045,25 @@ mod tests {
         assert!(
             error.to_string().contains("invalid poll tuning"),
             "expected our own ceiling to fire, got: {error}"
+        );
+    }
+
+    #[test]
+    fn deserializing_a_negative_backend_lag_allowance_is_rejected() {
+        // chrono encodes a `Duration` as a signed `[secs, nanos]` pair, so a synced or hand-edited
+        // cache can carry a *negative* allowance: one that would judge liveness against an instant
+        // in the future and shorten every window it widens. The wire type is the only door into
+        // `PollTuning`, and it revalidates rather than trusting what it was handed.
+        let mut wire = serde_json::to_value(PollTuning::default()).expect("tuning serialises");
+        wire["backend_lag_allowance"] =
+            serde_json::to_value(secs(-1)).expect("duration serialises");
+
+        let rejected: std::result::Result<PollTuning, _> = serde_json::from_value(wire);
+
+        let error = rejected.expect_err("serde must not bypass the constructor");
+        assert!(
+            error.to_string().contains("invalid poll tuning"),
+            "expected our own interlock to fire, got: {error}"
         );
     }
 
@@ -962,7 +1104,8 @@ mod tests {
         // which is what stops an overview window from disagreeing with the step it is fetched at.
         let tuning = PollTuning::default();
 
-        assert_eq!(tuning.host_window(), secs(210)); // down 150 + 2 * 30
+        assert_eq!(tuning.host_window(), secs(390)); // down 150 + 2 * 30 + lag 180
+        assert_eq!(tuning.detail_window(), secs(3780)); // chart 3600 + lag 180
         assert_eq!(tuning.overview_window(), secs(210)); // staleness 150 + 2 * 30
         assert_eq!(tuning.staleness_tolerance(), secs(90)); // 2 * 30 + 30
         assert_eq!(tuning.freshness_budget(), secs(150)); // the down threshold itself
@@ -979,6 +1122,7 @@ mod tests {
             secs(10),
             hours(1),
             secs(150),
+            secs(180),
             hours(24),
             256,
         )
@@ -986,7 +1130,26 @@ mod tests {
 
         assert_eq!(finer.overview_window(), secs(170)); // staleness 150 + 2 * 10
         assert_eq!(finer.staleness_tolerance(), secs(70)); // 2 * 30 + 10
-        assert_eq!(finer.host_window(), secs(210)); // liveness-derived, unchanged
+        assert_eq!(finer.host_window(), secs(390)); // liveness- and lag-derived, unchanged
+
+        // The lag allowance moves exactly the two windows that have to outreach it, and nothing
+        // else: a local collector has no lag, and a tuning that says so plans the narrow windows
+        // the earlier analysis assumed.
+        let local = PollTuning::new(
+            liveness(),
+            secs(30),
+            secs(30),
+            hours(1),
+            secs(150),
+            Duration::zero(),
+            hours(24),
+            256,
+        )
+        .expect("zero lag is a valid allowance, and the right one for a loopback collector");
+
+        assert_eq!(local.host_window(), secs(210)); // down 150 + 2 * 30, no lag term
+        assert_eq!(local.detail_window(), hours(1)); // exactly the charted span
+        assert_eq!(local.overview_window(), tuning.overview_window());
     }
 
     #[test]

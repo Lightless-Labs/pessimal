@@ -3,6 +3,13 @@
 **Created:** 2026-09-07
 **Status:** Design, not yet implemented
 **Completes:** the outstanding half of [`2026-09-06-m3-signoz-query-adapter.md`](2026-09-06-m3-signoz-query-adapter.md)
+**Amended:** 2026-09-09 — measuring a real backend added an eighth tuning input,
+`backend_lag_allowance` (preset 3 minutes), and the rule that **liveness is judged as of
+`now - backend_lag_allowance`** rather than as of `now`. The roster and detail windows widen by it
+too. This design budgeted one metric step for bucket quantisation and nothing for the backend's
+ingestion-to-queryable delay, which measured 88 seconds on SigNoz Cloud: a fleet beating perfectly
+read Stale, and the roster intermittently came back empty. See
+[`../solutions/backend-ingestion-lag-breaks-liveness.md`](../solutions/backend-ingestion-lag-breaks-liveness.md).
 
 ## 1. Goal
 
@@ -171,7 +178,7 @@ impl PollTuning {
     /// bucket is already `[step, 2*step)` old before poll latency);
     /// `max_staleness <= liveness.down_threshold()` (an alert must not outlive liveness);
     /// `chart_window >= max_staleness + metric_step`;
-    /// `forget_host_after >= liveness.down_threshold()`;
+    /// `backend_lag_allowance >= 0`; `forget_host_after >= liveness.down_threshold()`;
     /// `staleness_tolerance() <= freshness_budget()` (so the freshness ladder cannot invert);
     /// `max_retained_hosts >= 1`; and — because `LivenessPolicy` derives `Deserialize` over
     /// private fields and so arrives with `LivenessPolicy::new` bypassed —
@@ -185,13 +192,15 @@ impl PollTuning {
         metric_step: chrono::Duration,
         chart_window: chrono::Duration,
         max_staleness: chrono::Duration,
+        backend_lag_allowance: chrono::Duration,
         forget_host_after: chrono::Duration,
         max_retained_hosts: u32,
     ) -> Result<Self>;
 
     /// The preset that satisfies every interlock: `poll_interval` and `metric_step` =
     /// `heartbeat_interval()`, `max_staleness` = `down_threshold()`, `chart_window` = 1 hour,
-    /// `forget_host_after` = 24 hours, `max_retained_hosts` = 256.
+    /// `backend_lag_allowance` = 3 minutes, `forget_host_after` = 24 hours,
+    /// `max_retained_hosts` = 256.
     #[must_use] pub fn from_liveness(liveness: pessimal_core::LivenessPolicy) -> Self;
 
     #[must_use] pub fn liveness(&self) -> pessimal_core::LivenessPolicy;
@@ -202,12 +211,20 @@ impl PollTuning {
     #[must_use] pub fn metric_step(&self) -> chrono::Duration;
     #[must_use] pub fn chart_window(&self) -> chrono::Duration;
     #[must_use] pub fn max_staleness(&self) -> chrono::Duration;
+    /// How far behind wall clock the backend's newest *queryable* point lags. The one value an
+    /// operator may genuinely need to raise; too low and healthy hosts read Stale fleet-wide, or
+    /// the roster comes back empty.
+    #[must_use] pub fn backend_lag_allowance(&self) -> chrono::Duration;
     #[must_use] pub fn forget_host_after(&self) -> chrono::Duration;
     #[must_use] pub fn max_retained_hosts(&self) -> u32;
 
     /// Derived, not supplied, so they cannot be set wrong.
-    /// `down_threshold() + 2 * heartbeat_interval()` — a Down host must still be listed.
+    /// `down_threshold() + 2 * heartbeat_interval() + backend_lag_allowance()` — a Down host must
+    /// still be listed, and the newest queryable point must sit well inside rather than at the edge.
     #[must_use] pub fn host_window(&self) -> chrono::Duration;
+    /// `chart_window() + backend_lag_allowance()` — the span a focused host's detail queries ask
+    /// for, since the freshest part of a window ending at `now` is still inside the backend.
+    #[must_use] pub fn detail_window(&self) -> chrono::Duration;
     /// `max_staleness() + 2 * metric_step()` — about seven buckets at defaults.
     #[must_use] pub fn overview_window(&self) -> chrono::Duration;
     /// `2 * poll_interval() + metric_step()` — two missed polls plus a bucket. Past this the
@@ -309,7 +326,7 @@ pub struct PollPlan {
 /// Two tiers. Fleet-wide: one spec per `config.planned_metrics()` with `HostSelector::All` over
 /// `tuning.overview_window()` at `tuning.metric_step()` — N_metrics requests, not
 /// N_hosts x N_metrics. Focus: when `config.focus` is `Some(host)`, one spec per `detail_metrics`
-/// with `HostSelector::Host(host)` over `tuning.chart_window()` — at `tuning.metric_step()`,
+/// with `HostSelector::Host(host)` over `tuning.detail_window()` — at `tuning.metric_step()`,
 /// the same step — emitted last. `host_range = TimeRange::ending_at(now, tuning.host_window())`.
 ///
 /// **There is exactly one step in this crate.** If a coarser `chart_step` is ever added, coarse
@@ -1163,7 +1180,7 @@ the fold as data, not as an error return.
 | App killed, relaunched against a persisted state | `restore` returns the state with `polled_this_session == false`; `advised_next_poll` survives so the blind-gap rule handles the dwell. Advice is `Poll { after: 0 }`. | `Freshness::Idle { last_success }` — "as of 6 hours ago", never `Fresh`. The fleet draws instantly from cache; the first fold clears `Idle`. |
 | Relaunch whose very first poll fails | `polled_this_session` is set by the first fold whatever its outcome, so `Idle` is cleared and the real failure surfaces. | `Unusable { failure: Unauthorized }` with an Open Settings button — not `Idle` hiding a dead key behind a cache age. |
 | Persisted state is a schema behind, or corrupt | `restore` discards it and returns `FleetState::new` plus a `RestoreReport` saying so. Never `Err`. | An empty fleet and one cold start. The app does not refuse to launch. |
-| A host goes silent past `host_window` and drops out of `list_hosts` | Retained with its old `last_heartbeat`; `LivenessPolicy::evaluate` reads `Down` because `host_window > down_threshold` by construction. Forgotten after `forget_host_after`, or when the `max_retained_hosts` cap evicts it, or on `forget_host`. | A positive **Down** row flagged "not in the last roster" — not a host that silently vanished at the moment the operator needed it. |
+| A host goes silent past `host_window` and drops out of `list_hosts` | Retained with its old `last_heartbeat`; `LivenessPolicy::evaluate` reads `Down` because `host_window > down_threshold + backend_lag_allowance` by construction, and the verdict is judged as of `now - backend_lag_allowance`. Forgotten after `forget_host_after`, or when the `max_retained_hosts` cap evicts it, or on `forget_host`. | A positive **Down** row flagged "not in the last roster" — not a host that silently vanished at the moment the operator needed it. |
 | A backend churns hostnames | The cap evicts the oldest `last_seen_in_roster` first, dropping series and evaluations with them. | A bounded list. No 24 h of ghosts each carrying an evaluation per rule. |
 | A stored rule has a NaN threshold or an empty name | `validate_rule` fails on the fold's critical path: no evaluation is created and `AlertView.invalid_reason` is set. | The rule is shown, badged broken. Not a row that silently never fires. |
 | A rule is edited (threshold, dwell, selector, metric) | `rule_fingerprint` differs, the evaluation is replaced at `NoData`. | Dwell restarts. A shortened `for_duration` cannot fire instantly off an old `since`. |
@@ -1197,7 +1214,8 @@ Roughly forty synchronous pure-function tests over literal values, plus four `#[
 - `an_unfocused_plan_is_one_query_per_planned_metric`
 - `focus_adds_detail_queries_and_orders_them_last`
 - `the_range_end_is_exactly_now`
-- `the_host_window_outlives_the_down_threshold`
+- `the_host_window_outlives_the_down_threshold` (the down threshold *plus* the lag allowance)
+- `the_newest_data_the_backend_can_answer_with_sits_well_inside_every_window`
 - `a_query_spec_round_trips_to_a_series_request`
 
 **Observation (`observation.rs`)**

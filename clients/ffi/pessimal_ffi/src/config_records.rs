@@ -427,8 +427,8 @@ fn as_invalid_tuning(error: CoreError) -> FfiError {
 /// Every duration the client core measures a poll, a window, or a dwell against.
 ///
 /// [`PollTuning`]'s fields are private and its windows are functions, so this is a flat mirror of
-/// its seven inputs plus a throwing constructor, [`poll_tuning_validated`]. A record built in Swift
-/// is just seven numbers until that function has accepted it — it is not a `PollTuning` and this
+/// its eight inputs plus a throwing constructor, [`poll_tuning_validated`]. A record built in Swift
+/// is just eight numbers until that function has accepted it — it is not a `PollTuning` and this
 /// crate does not treat it as one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct PollTuningRecord {
@@ -440,6 +440,13 @@ pub struct PollTuningRecord {
     pub chart_window_seconds: i64,
     /// How old a sample may be and still be evidence for an alert.
     pub max_staleness_seconds: i64,
+    /// How far behind wall clock the backend's newest queryable point lags, in seconds.
+    ///
+    /// The one field on this screen an operator may genuinely need to raise: it describes their
+    /// backend's ingestion delay, not their taste. Too low and every host reads stale at once, or
+    /// the roster comes back empty. Non-negative; zero only for a collector on loopback. See
+    /// [`PollTuning::backend_lag_allowance`].
+    pub backend_lag_allowance_seconds: i64,
     pub forget_host_after_seconds: i64,
     pub max_retained_hosts: u32,
 }
@@ -456,6 +463,7 @@ impl From<PollTuning> for PollTuningRecord {
             metric_step_seconds: duration_to_seconds(tuning.metric_step()),
             chart_window_seconds: duration_to_seconds(tuning.chart_window()),
             max_staleness_seconds: duration_to_seconds(tuning.max_staleness()),
+            backend_lag_allowance_seconds: duration_to_seconds(tuning.backend_lag_allowance()),
             forget_host_after_seconds: duration_to_seconds(tuning.forget_host_after()),
             max_retained_hosts: tuning.max_retained_hosts(),
         }
@@ -477,6 +485,7 @@ impl TryFrom<PollTuningRecord> for PollTuning {
             metric_step_seconds,
             chart_window_seconds,
             max_staleness_seconds,
+            backend_lag_allowance_seconds,
             forget_host_after_seconds,
             max_retained_hosts,
         } = record;
@@ -487,6 +496,7 @@ impl TryFrom<PollTuningRecord> for PollTuning {
             seconds_to_duration(metric_step_seconds)?,
             seconds_to_duration(chart_window_seconds)?,
             seconds_to_duration(max_staleness_seconds)?,
+            seconds_to_duration(backend_lag_allowance_seconds)?,
             seconds_to_duration(forget_host_after_seconds)?,
             max_retained_hosts,
         )
@@ -692,7 +702,7 @@ pub fn poll_tuning_from_liveness(
     Ok(PollTuning::from_liveness(LivenessPolicy::try_from(liveness)?).into())
 }
 
-/// The throwing constructor for [`PollTuningRecord`]: core's nine interlocks, or the message that
+/// The throwing constructor for [`PollTuningRecord`]: core's ten interlocks, or the message that
 /// says which one failed.
 ///
 /// Takes and returns the record because UniFFI records are plain Swift structs that the app can
@@ -1009,6 +1019,7 @@ mod tests {
             Duration::seconds(60),
             Duration::hours(2),
             Duration::seconds(300),
+            Duration::minutes(3),
             Duration::hours(12),
             64,
         )

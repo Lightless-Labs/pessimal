@@ -2992,8 +2992,8 @@ public func FfiConverterTypePollResult_lower(_ value: PollResult) -> RustBuffer 
  * Every duration the client core measures a poll, a window, or a dwell against.
  *
  * [`PollTuning`]'s fields are private and its windows are functions, so this is a flat mirror of
- * its seven inputs plus a throwing constructor, [`poll_tuning_validated`]. A record built in Swift
- * is just seven numbers until that function has accepted it — it is not a `PollTuning` and this
+ * its eight inputs plus a throwing constructor, [`poll_tuning_validated`]. A record built in Swift
+ * is just eight numbers until that function has accepted it — it is not a `PollTuning` and this
  * crate does not treat it as one.
  */
 public struct PollTuningRecord: Equatable, Hashable {
@@ -3009,6 +3009,15 @@ public struct PollTuningRecord: Equatable, Hashable {
      * How old a sample may be and still be evidence for an alert.
      */
     public let maxStalenessSeconds: Int64
+    /**
+     * How far behind wall clock the backend's newest queryable point lags, in seconds.
+     *
+     * The one field on this screen an operator may genuinely need to raise: it describes their
+     * backend's ingestion delay, not their taste. Too low and every host reads stale at once, or
+     * the roster comes back empty. Non-negative; zero only for a collector on loopback. See
+     * [`PollTuning::backend_lag_allowance`].
+     */
+    public let backendLagAllowanceSeconds: Int64
     public let forgetHostAfterSeconds: Int64
     public let maxRetainedHosts: UInt32
 
@@ -3021,12 +3030,21 @@ public struct PollTuningRecord: Equatable, Hashable {
          */metricStepSeconds: Int64, chartWindowSeconds: Int64, 
         /**
          * How old a sample may be and still be evidence for an alert.
-         */maxStalenessSeconds: Int64, forgetHostAfterSeconds: Int64, maxRetainedHosts: UInt32) {
+         */maxStalenessSeconds: Int64, 
+        /**
+         * How far behind wall clock the backend's newest queryable point lags, in seconds.
+         *
+         * The one field on this screen an operator may genuinely need to raise: it describes their
+         * backend's ingestion delay, not their taste. Too low and every host reads stale at once, or
+         * the roster comes back empty. Non-negative; zero only for a collector on loopback. See
+         * [`PollTuning::backend_lag_allowance`].
+         */backendLagAllowanceSeconds: Int64, forgetHostAfterSeconds: Int64, maxRetainedHosts: UInt32) {
         self.liveness = liveness
         self.pollIntervalSeconds = pollIntervalSeconds
         self.metricStepSeconds = metricStepSeconds
         self.chartWindowSeconds = chartWindowSeconds
         self.maxStalenessSeconds = maxStalenessSeconds
+        self.backendLagAllowanceSeconds = backendLagAllowanceSeconds
         self.forgetHostAfterSeconds = forgetHostAfterSeconds
         self.maxRetainedHosts = maxRetainedHosts
     }
@@ -3052,6 +3070,7 @@ public struct FfiConverterTypePollTuningRecord: FfiConverterRustBuffer {
                 metricStepSeconds: FfiConverterInt64.read(from: &buf), 
                 chartWindowSeconds: FfiConverterInt64.read(from: &buf), 
                 maxStalenessSeconds: FfiConverterInt64.read(from: &buf), 
+                backendLagAllowanceSeconds: FfiConverterInt64.read(from: &buf), 
                 forgetHostAfterSeconds: FfiConverterInt64.read(from: &buf), 
                 maxRetainedHosts: FfiConverterUInt32.read(from: &buf)
         )
@@ -3063,6 +3082,7 @@ public struct FfiConverterTypePollTuningRecord: FfiConverterRustBuffer {
         FfiConverterInt64.write(value.metricStepSeconds, into: &buf)
         FfiConverterInt64.write(value.chartWindowSeconds, into: &buf)
         FfiConverterInt64.write(value.maxStalenessSeconds, into: &buf)
+        FfiConverterInt64.write(value.backendLagAllowanceSeconds, into: &buf)
         FfiConverterInt64.write(value.forgetHostAfterSeconds, into: &buf)
         FfiConverterUInt32.write(value.maxRetainedHosts, into: &buf)
     }
@@ -5972,7 +5992,7 @@ public func pollTuningFromLiveness(liveness: LivenessPolicyRecord)throws  -> Pol
 })
 }
 /**
- * The throwing constructor for [`PollTuningRecord`]: core's nine interlocks, or the message that
+ * The throwing constructor for [`PollTuningRecord`]: core's ten interlocks, or the message that
  * says which one failed.
  *
  * Takes and returns the record because UniFFI records are plain Swift structs that the app can
@@ -6063,7 +6083,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_pessimal_ffi_checksum_func_poll_tuning_from_liveness() != 29890) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_pessimal_ffi_checksum_func_poll_tuning_validated() != 31427) {
+    if (uniffi_pessimal_ffi_checksum_func_poll_tuning_validated() != 61848) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_pessimal_ffi_checksum_func_tuning_warning_message() != 18467) {

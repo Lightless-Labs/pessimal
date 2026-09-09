@@ -77,8 +77,11 @@ pub struct PollPlan {
     /// The single instant the whole poll is planned and later evaluated at. Supplied by the
     /// caller; nothing in this crate reads a clock.
     pub now: DateTime<Utc>,
-    /// The window for `list_hosts`. Wider than the down threshold, so a host we are about to
-    /// call `Down` is still listed rather than silently gone.
+    /// The window for `list_hosts`. Wider than the down threshold *plus* the backend's lag
+    /// allowance, so a host we are about to call `Down` is still listed rather than silently gone,
+    /// and the newest point the backend can answer with sits well inside the window instead of at
+    /// its far edge — at the edge it intermittently falls outside, `list_hosts` returns nothing,
+    /// and a late fleet reads as an absent one.
     pub host_range: TimeRange,
     /// Fleet-wide overview queries first, focused detail queries last.
     ///
@@ -92,8 +95,14 @@ pub struct PollPlan {
 ///
 /// Fleet-wide: one spec per [`FleetConfig::planned_metrics`] with [`HostSelector::All`] over
 /// `tuning.overview_window()`. Focus: when `config.focus` is `Some(host)`, one spec per
-/// `config.detail_metrics` with [`HostSelector::Host`] over `tuning.chart_window()`, emitted
+/// `config.detail_metrics` with [`HostSelector::Host`] over `tuning.detail_window()`, emitted
 /// last. `host_range` is `tuning.host_window()` ending at `now`.
+///
+/// Every window ends at `now` and is widened at the *start*. The two that have to reach past the
+/// backend's ingestion lag — the roster window and the focused host's detail window — carry
+/// `tuning.backend_lag_allowance()` in their derivation, because a window ending at `now` whose
+/// span is only what the fleet logically needs is mostly behind the newest queryable point.
+/// Shortening the window's end instead would age every reading the fold then judges as current.
 ///
 /// **There is exactly one step in this crate**, and both tiers use it. The temptation is a
 /// coarser `chart_step` for the long focused window, which would be cheaper and would look
@@ -108,9 +117,10 @@ pub struct PollPlan {
 /// reaches back past the earliest instant a timestamp can represent. A
 /// [`crate::config::PollTuning`] built by its constructor cannot cause either — the interlocks
 /// force every duration positive, and [`crate::config::MAX_TUNING_DURATION`] holds every derived
-/// window five orders of magnitude inside the representable range. That second half is why the
-/// claim is safe to make: relative interlocks alone left a whole band of legal `Duration` values
-/// that satisfied every one of them and still overflowed here.
+/// window — at most about four times the largest field, now that two of them carry the lag
+/// allowance as well — five orders of magnitude inside the representable range. That second half is
+/// why the claim is safe to make: relative interlocks alone left a whole band of legal `Duration`
+/// values that satisfied every one of them and still overflowed here.
 pub fn plan_poll(config: &FleetConfig, now: DateTime<Utc>) -> Result<PollPlan> {
     let tuning = config.tuning;
     let step = tuning.metric_step();
@@ -135,7 +145,7 @@ pub fn plan_poll(config: &FleetConfig, now: DateTime<Utc>) -> Result<PollPlan> {
     // Tier two: the one host the user has open, over the chart window. Emitted last so it wins.
     // The overlap with tier one is not deduplicated — that duplication *is* the mechanism.
     if let Some(host) = config.focus.as_ref() {
-        let detail_range = TimeRange::ending_at(now, tuning.chart_window())?;
+        let detail_range = TimeRange::ending_at(now, tuning.detail_window())?;
         queries.extend(config.detail_metrics.iter().map(|&metric| QuerySpec {
             metric,
             selector: HostSelector::Host(host.clone()),
@@ -169,6 +179,11 @@ mod tests {
     fn web1() -> HostId {
         HostId::new("web-1")
     }
+
+    /// The lag measured against SigNoz Cloud: with the agent exporting every five seconds and
+    /// still running, the newest *queryable* heartbeat was 88 seconds behind wall clock. Part of
+    /// that is bucket quantisation, most of it the backend's ingestion-to-queryable delay.
+    const MEASURED_BACKEND_LAG_SECONDS: i64 = 88;
 
     /// A rule on a metric the default overview set does not chart, so `planned_metrics()` is
     /// observably wider than `overview_metrics` rather than accidentally equal to it.
@@ -237,8 +252,10 @@ mod tests {
             assert_eq!(query.selector, HostSelector::Host(web1()));
             assert_eq!(
                 query.range.duration(),
-                config.tuning.chart_window(),
-                "the long window is what the focused host earns, and it is why later outcomes win"
+                config.tuning.detail_window(),
+                "the long window is what the focused host earns, and it is why later outcomes \
+                 win — widened by the lag allowance, because the window ends at `now` and the \
+                 freshest part of it is still inside the backend"
             );
             assert_eq!(
                 query.step,
@@ -274,9 +291,49 @@ mod tests {
         let plan = plan_poll(&config, at(0)).expect("the default tuning has positive windows");
 
         assert!(
-            plan.host_range.duration() > config.tuning.liveness().down_threshold(),
+            plan.host_range.duration()
+                > config.tuning.liveness().down_threshold() + config.tuning.backend_lag_allowance(),
             "a host silent long enough to be called Down must still be listed, or it vanishes \
-             from the roster at exactly the moment an operator needs to see it"
+             from the roster at exactly the moment an operator needs to see it — and liveness is \
+             judged as of `now - backend_lag_allowance`, so the window has to reach a whole down \
+             threshold back from *that* instant rather than from `now`"
+        );
+    }
+
+    /// Measured against SigNoz Cloud, not reasoned about: a 30-minute window found the host and
+    /// the derived window found nothing, over identical data. A window ending at `now` and only as
+    /// wide as the down threshold is mostly *behind* the newest queryable bucket, which then sits
+    /// at its far edge and intermittently outside it — `list_hosts` returns nothing and the fleet
+    /// reads as absent rather than as late.
+    #[test]
+    fn the_newest_data_the_backend_can_answer_with_sits_well_inside_every_window() {
+        let now = at(0);
+        let config = config().with_focus(Some(web1()));
+        let newest_queryable = now - Duration::seconds(MEASURED_BACKEND_LAG_SECONDS);
+
+        let plan = plan_poll(&config, now).expect("the default tuning has positive windows");
+
+        assert!(
+            plan.host_range.contains(newest_queryable),
+            "the freshest heartbeat the backend can return must be inside the roster window"
+        );
+        assert!(
+            newest_queryable - plan.host_range.start() > config.tuning.liveness().down_threshold(),
+            "inside is not enough: a full down threshold of history has to sit behind the newest \
+             queryable point, or a host about to be called Down has already dropped out of the \
+             roster"
+        );
+
+        let detail = plan
+            .queries
+            .last()
+            .expect("a focused plan ends with a detail query");
+        assert_eq!(detail.range.duration(), config.tuning.detail_window());
+        assert!(
+            detail.range.duration()
+                >= config.tuning.chart_window() + Duration::seconds(MEASURED_BACKEND_LAG_SECONDS),
+            "a chart asked for exactly its own span is short by the lag at the live end — the end \
+             an operator is looking at"
         );
     }
 

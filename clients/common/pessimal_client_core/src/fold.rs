@@ -232,8 +232,9 @@ impl FleetState {
     ///    for. Skipped on the first fold, when there is no advised instant.
     /// 2. **Roster.** Merge each `Host` field by field, then recompute `Liveness` for EVERY
     ///    retained host — including ones absent from this roster, which keep their old
-    ///    `last_heartbeat` and therefore read `Down` naturally. Nothing happens on a failed or
-    ///    unattempted roster.
+    ///    `last_heartbeat` and therefore read `Down` naturally — as of
+    ///    `now - backend_lag_allowance()`, the latest instant the backend could have data for.
+    ///    Nothing happens on a failed or unattempted roster.
     /// 3. **Retention.** Forget hosts unseen for `forget_host_after`, then evict the oldest
     ///    sightings down to `max_retained_hosts`. Series and evaluations go with them.
     /// 4. **Evaluation reconciliation.** The set is exactly `{(host, rule) : rule.enabled &&
@@ -591,8 +592,25 @@ impl FleetState {
         // `last_heartbeat` and therefore reads `Down` naturally, which is a positive judgement;
         // `Unknown` is left to mean "in the roster, never beat".
         let liveness = tuning.liveness();
+
+        // Judged as of `now - backend_lag_allowance`, NOT as of `now`. A poll cannot observe the
+        // present: measured against SigNoz Cloud, the newest queryable heartbeat was 88 seconds
+        // behind wall clock while the agent was still exporting every five seconds, and every
+        // columnar metrics backend batches on write. Handing `LivenessPolicy` the poll instant
+        // charges every host for a delay on the *read* path, so a fleet beating perfectly reads
+        // Stale and drifts toward Down — which is what this did. The policy is right to compare a
+        // heartbeat against an instant; this is the latest instant the backend could have told us
+        // anything about, and therefore the only honest one to compare against. `checked_sub_signed`
+        // because `DateTime - Duration` panics on overflow and this function cannot fail; the
+        // tuning ceiling makes the fallback unreachable.
+        let as_of = now
+            .checked_sub_signed(tuning.backend_lag_allowance())
+            .unwrap_or(now);
         for record in self.hosts.values_mut() {
-            record.liveness = liveness.evaluate(record.host.last_heartbeat, now);
+            record.liveness = liveness.evaluate(record.host.last_heartbeat, as_of);
+            // The verdict is *judged* as of `as_of` and *reached* now. `liveness_at` is the second
+            // of those: the UI renders its age to decide whether the picture is still worth
+            // believing, and backdating it would make every fresh poll look late.
             record.liveness_at = now;
         }
 
@@ -1181,6 +1199,11 @@ mod tests {
         Host::new(HostId::new(name), OsFamily::Linux).with_last_heartbeat(beat)
     }
 
+    /// The measured age of a perfectly healthy host's newest heartbeat: 88 seconds of SigNoz Cloud
+    /// ingestion lag plus a 30-second bucket stamped at its start. Already past the 90-second
+    /// stale threshold, and two thirds of the way to Down.
+    const MEASURED_HEARTBEAT_AGE_SECONDS: i64 = 118;
+
     fn cpu(name: &str, samples: &[(DateTime<Utc>, f64)]) -> MetricSeries {
         series(name, MetricKind::CpuUtilization, samples)
     }
@@ -1700,6 +1723,81 @@ mod tests {
         );
     }
 
+    /// The first bug the lag produced: a fleet that was beating perfectly read Stale, fleet-wide,
+    /// and drifted toward Down. Nothing was wrong with the hosts and nothing was wrong with
+    /// `LivenessPolicy` — the instant it was handed was one the backend could not yet have data
+    /// for.
+    #[test]
+    fn a_host_beating_perfectly_behind_the_backends_lag_reads_alive() {
+        let config = config();
+        let beat = at(0);
+        let now = beat + Duration::seconds(MEASURED_HEARTBEAT_AGE_SECONDS);
+
+        let polled = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(&config, now, vec![host("web-1", beat)], &[]),
+        );
+
+        let view = polled.view.host(&HostId::new("web-1")).expect("listed");
+        assert_eq!(
+            view.liveness,
+            Liveness::Alive,
+            "a host exporting on schedule must not be called Stale because the backend had not \
+             finished ingesting it: the verdict is as of `now - backend_lag_allowance`, the latest \
+             instant the backend could have told us anything about"
+        );
+        assert_eq!(
+            view.liveness_at, now,
+            "the verdict is *judged* as of an earlier instant but *reached* now; the UI renders \
+             the age of this one and must not be told the poll is older than it is"
+        );
+        assert_eq!(polled.view.counts.alive, 1);
+        assert_eq!(polled.view.counts.stale, 0);
+    }
+
+    /// The shift moves the whole ladder back by the allowance. It must not flatten it: a host that
+    /// really has stopped is still called Stale and then Down, just that much later, which is the
+    /// earliest anyone could honestly say so.
+    #[test]
+    fn the_lag_allowance_shifts_the_liveness_ladder_without_blinding_it() {
+        let config = config();
+        let lag = config.tuning.backend_lag_allowance();
+        let stale = config.tuning.liveness().stale_threshold();
+        let down = config.tuning.liveness().down_threshold();
+        let now = at(10_000);
+        let second = Duration::seconds(1);
+
+        let verdict = |age: Duration| {
+            FleetState::new(BACKEND)
+                .apply(
+                    &config,
+                    &clean_poll(&config, now, vec![host("web-1", now - age)], &[]),
+                )
+                .view
+                .host(&HostId::new("web-1"))
+                .expect("listed")
+                .liveness
+        };
+
+        assert_eq!(
+            verdict(lag),
+            Liveness::Alive,
+            "a heartbeat exactly as old as the allowance is the freshest one that can exist"
+        );
+        assert_eq!(
+            verdict(lag + stale),
+            Liveness::Alive,
+            "the stale threshold itself is still alive, measured from the shifted instant"
+        );
+        assert_eq!(verdict(lag + stale + second), Liveness::Stale);
+        assert_eq!(verdict(lag + down), Liveness::Stale);
+        assert_eq!(
+            verdict(lag + down + second),
+            Liveness::Down,
+            "the allowance delays a Down verdict by exactly itself and never suppresses one"
+        );
+    }
+
     #[test]
     fn roster_merge_never_regresses_last_heartbeat() {
         let config = config();
@@ -1906,6 +2004,7 @@ mod tests {
             Duration::seconds(30),
             Duration::hours(1),
             Duration::seconds(150),
+            Duration::minutes(3),
             Duration::hours(24),
             2,
         )
@@ -2256,10 +2355,16 @@ mod tests {
     fn fleet_counts_match_the_host_list() {
         let rule = cpu_rule(0);
         let config = config().with_rules(vec![rule]);
+        // Heartbeat ages are measured from `now - backend_lag_allowance`, the latest instant the
+        // backend could have data for, so the fixture names each host's age in those terms. The
+        // old literals — 0s, 120s and 200s before `now` — only straddled the 90s and 150s
+        // thresholds while the allowance was implicitly zero, which is true of a collector on
+        // loopback and of nothing else.
+        let judged_at = at(0) - config.tuning.backend_lag_allowance();
         let roster = vec![
-            host("alive-1", at(0)),
-            host("stale-1", at(-120)),
-            host("down-1", at(-200)),
+            host("alive-1", judged_at),
+            host("stale-1", judged_at - Duration::seconds(120)),
+            host("down-1", judged_at - Duration::seconds(200)),
             Host::new(HostId::new("silent-1"), OsFamily::Linux),
         ];
 
