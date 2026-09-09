@@ -1,7 +1,7 @@
 # M3 — SigNoz query adapter
 
 **Created:** 2026-09-06
-**Status:** Built and tested at the HTTP level. Not yet run against a live instance.
+**Status:** Verified against a live SigNoz Cloud instance on 2026-09-09. Four bugs found and fixed.
 **Updated:** 2026-09-06
 
 ## Goal
@@ -94,12 +94,27 @@ Aggregation and temporality enum values come from `pkg/types/metrictypes/metrict
 `latest | sum | avg | min | max | count | count_distinct | rate | increase` for time, and
 `sum | avg | min | max | count` for space.
 
-## What is still unverified
+## What the live verification found
 
-The adapter has never spoken to a real SigNoz. The *structure* is authoritative, but the
-*behaviour* is not: which labels are actually populated, how an unknown metric name is reported,
-and whether Cloud differs from self-hosted in any of it. One `query_range` call against the owner's
-Cloud instance would settle all three.
+It has now spoken to a real SigNoz, and the structure being authoritative was not enough. Four bugs,
+none reachable from a mock:
+
+1. **The response envelope is one level deeper than the Go type.** `QueryRangeResponse` is the inner
+   object; the handler wraps it as `{status, data: {type, meta, data: {results}}}`. The parser read
+   `data.results`, found `type` and `meta` instead, and — because every field defaulted — returned an
+   empty result set with no error. A reporting fleet looked like an empty one.
+2. **Counters need `temporality: "Cumulative"`.** The design's example used `"Unspecified"`, copied
+   from SigNoz's own gauge example. A cumulative Sum queried as Unspecified returns
+   `aggregations: null`: no error, no warning, nothing. Gauges are the opposite and need
+   `"Unspecified"`. Verified metric by metric.
+3. **The agent had no TLS roots on the gRPC path**, so it could not export to any cloud backend at
+   all. Not this crate's bug, but only this exercise could surface it.
+4. **The backend's ingestion lag is ~88 seconds**, which broke liveness and emptied the roster. See
+   [`../solutions/backend-ingestion-lag-breaks-liveness.md`](../solutions/backend-ingestion-lag-breaks-liveness.md).
+
+Confirmed working as designed: `labels[].key` really is an object with `.name`, timestamps really are
+epoch milliseconds, and the per-direction split on `system.network.io` survives the round trip as two
+series.
 
 ## Decisions taken
 

@@ -28,6 +28,12 @@
   the OTLP export smoke test against a real collector and the Swift smoke test. The two risks flagged
   earlier did not materialise — Windows built `aws-lc-rs` without needing NASM, and the collector
   service container was reachable.
+- **The whole read path is verified against production.** Agent → OTLP/TLS → SigNoz Cloud → query
+  adapter → fold → view, confirmed with a real instance: the roster finds the host, it reads Alive,
+  and five metrics arrive with real values. Two opt-in tests keep it honest, both skipped without
+  `PESSIMAL_LIVE_SIGNOZ_URL` / `PESSIMAL_LIVE_SIGNOZ_KEY`:
+  `pessimal_query_signoz --test live_signoz` for the adapter, and
+  `pessimal_ffi --test live_round_trip` for the whole chain.
 - M5 onward (Bazel, the macOS menu bar app, the iOS app) is unstarted; `clients/apple/macos` and
   `clients/apple/ios` still hold placeholders.
 
@@ -48,6 +54,19 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 - None open.
 
 ## Gotchas found the hard way
+
+- **A collector on loopback verifies almost nothing.** Four real bugs survived every local run, the
+  CI export job and the smoke script, and all four fell out of the first contact with a real
+  backend: no TLS roots on the gRPC path, the response envelope parsed one level too shallow, the
+  wrong temporality for counters, and no budget for ingestion lag. `http://localhost:4317`
+  exercises neither certificates, nor auth, nor lag, nor the real response shape.
+- **A fixture built from the same source as the parser cannot find a parser bug.** The mock bodies
+  and the wire types were both written from SigNoz's Go `QueryRangeResponse`, which is only the
+  inner half of the HTTP envelope. They agreed with each other and both disagreed with the server,
+  and no number of assertions between them would ever have noticed.
+- **`#[serde(default)]` on every field turns a wrong shape into an empty answer.** That is what made
+  the envelope bug silent: a fleet that was reporting normally looked like a fleet with no hosts.
+  Required fields where the shape is load-bearing.
 
 - **`swiftc` needs the modulemap passed explicitly.** The generated `PessimalFFI.swift` guards its
   import with `#if canImport(PessimalFFIFFI)`, which silently compiles to nothing without
@@ -93,9 +112,12 @@ M5, the macOS menu bar app, which is where Bazel finally enters. Two things firs
 1. Read [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)
    before writing `MODULE.bazel`. MSRV is 1.95 and the sibling projects pin a `rules_rust` that
    predates it. None of them has a `macos_application` target either, so that part is new ground.
-2. Confirm the SigNoz adapter against a live instance with one `query_range` call — see the open
-   questions in [`plans/2026-09-06-m3-signoz-query-adapter.md`](plans/2026-09-06-m3-signoz-query-adapter.md).
-   This is now the last unverified thing in the read path.
+2. ~~Confirm the SigNoz adapter against a live instance~~ — done 2026-09-09, and it found four bugs.
+   See [`solutions/backend-ingestion-lag-breaks-liveness.md`](solutions/backend-ingestion-lag-breaks-liveness.md)
+   and the fixes either side of it in the log.
+3. Pick up [`todos/alert-evidence-staleness-ignores-backend-lag.md`](../todos/alert-evidence-staleness-ignores-backend-lag.md)
+   before the apps start drawing alerts: liveness now budgets for backend lag and the alert evidence
+   gate does not, so a lagging host can read Alive while all its alerts read NoData.
 
 One thing the client core cannot check and M4 must not forget: nothing detects an unwired
 `SignozConfig::for_policy`, and the symptom is a healthy fleet silently reading stale or down with
