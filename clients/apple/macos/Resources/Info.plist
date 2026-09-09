@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Pessimal</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pessimal</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.lightless-labs.pessimal.macos</string>
+	<key>CFBundleExecutable</key>
+	<string>Pessimal</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__PESSIMAL_VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__PESSIMAL_BUILD__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- The whole point of a menu bar app: no Dock icon, no main window, no app switcher entry. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Pessimal contributors. GNU AGPL-3.0-or-later.</string>
+</dict>
+</plist>
