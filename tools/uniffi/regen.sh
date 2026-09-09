@@ -22,8 +22,16 @@ cargo build -p pessimal_ffi
 cargo build -p pessimal_uniffi_bindgen
 
 mkdir -p "$OUT"
+# The cdylib's extension is platform-specific, and the bindgen reads the library rather than the
+# source, so this has to resolve it rather than hardcode one.
+case "$(uname -s)" in
+  Darwin) LIB=target/debug/libpessimal_ffi.dylib ;;
+  *)      LIB=target/debug/libpessimal_ffi.so ;;
+esac
+[ -f "$LIB" ] || { echo "no cdylib at $LIB" >&2; exit 1; }
+
 ./target/debug/pessimal-uniffi-bindgen generate \
-    --library target/debug/libpessimal_ffi.dylib \
+    --library "$LIB" \
     --language swift \
     --out-dir "$OUT"
 

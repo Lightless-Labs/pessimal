@@ -53,9 +53,15 @@ plan-gather-fold: pure planning, one async gather that never fails, and a pure f
 next state, the view, the alert transitions, and polling advice. See
 [`2026-09-07-m3-client-core.md`](2026-09-07-m3-client-core.md).
 
-### M4 — FFI bridge
-`pessimal_ffi` exposing the client core to Swift. Bindgen wired up, generated bindings checked in,
-CI verifying they are not stale.
+### M4 — FFI bridge ✅
+`pessimal_ffi` exposes the client core to Swift: a Record per client_core type and a `FleetSession`
+object, per section 4.11 of the client-core design. Bindgen wired up via `tools/uniffi/regen.sh`,
+generated bindings committed, and CI both fails on stale bindings and drives the boundary from Swift
+via `scripts/swift-smoke.sh`.
+
+`#[uniffi::export(async_runtime = "tokio")]` proved sufficient — no hand-rolled runtime, unlike all
+three sibling projects. See
+[`../solutions/uniffi-tokio-runtime-verified-from-swift.md`](../solutions/uniffi-tokio-runtime-verified-from-swift.md).
 
 ### M5 — macOS menu bar app
 `MenuBarExtra` + `LSUIElement`, showing fleet liveness and per-host metrics. New ground: none of the

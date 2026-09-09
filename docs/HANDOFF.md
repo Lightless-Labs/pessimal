@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-07
+**Updated:** 2026-09-09
 
 ## Current state
 
@@ -20,8 +20,16 @@
 - **M3 client core** — `pessimal_client_core` is plan-gather-fold, 7,774 lines and 120 tests, per
   [`docs/plans/2026-09-07-m3-client-core.md`](plans/2026-09-07-m3-client-core.md). The hexagon holds:
   no reqwest, no tokio outside dev-dependencies, no query adapter, no uniffi.
-- M4 onward (the FFI bridge, Bazel, the two apps) is unstarted; `clients/ffi` and `clients/apple`
-  still hold placeholders.
+- **M4 FFI bridge** — `pessimal_ffi` mirrors every client_core type as a UniFFI Record and exposes
+  `FleetSession`, per section 4.11 of the client-core design. 6,011 lines, 96 tests, 77 public Swift
+  types with no name collisions. Generated bindings are committed at
+  `clients/apple/PessimalFFI/Sources/` and CI fails if they go stale.
+- **CI is green on all three platforms**, first run: ubuntu-latest, macos-15, windows-latest, plus
+  the OTLP export smoke test against a real collector and the Swift smoke test. The two risks flagged
+  earlier did not materialise — Windows built `aws-lc-rs` without needing NASM, and the collector
+  service container was reachable.
+- M5 onward (Bazel, the macOS menu bar app, the iOS app) is unstarted; `clients/apple/macos` and
+  `clients/apple/ios` still hold placeholders.
 
 ## Verifying the agent locally
 
@@ -40,6 +48,16 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 - None open.
 
 ## Gotchas found the hard way
+
+- **`swiftc` needs the modulemap passed explicitly.** The generated `PessimalFFI.swift` guards its
+  import with `#if canImport(PessimalFFIFFI)`, which silently compiles to nothing without
+  `-Xcc -fmodule-map-file=…/PessimalFFIFFI.modulemap`. The error is
+  `cannot find type 'RustBuffer' in scope`, which never mentions modules. See
+  [`solutions/uniffi-tokio-runtime-verified-from-swift.md`](solutions/uniffi-tokio-runtime-verified-from-swift.md).
+- **Swift Record and enum names share one flat namespace** across every Rust module. A collision
+  compiles in Rust, generates bindings fine, and fails the Xcode build with an unrelated-looking
+  redeclaration error. `grep -oE "^public (struct|enum) [A-Za-z0-9_]+" …/PessimalFFI.swift | sort |
+  uniq -d` is the check.
 
 - **OTLP/HTTP needs the signal path appended.** `with_endpoint()` is treated as a *signal-specific*
   endpoint by `opentelemetry-otlp`, so it posts to `/` and every collector answers 404. Pessimal
@@ -70,13 +88,14 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 
 ## Next up
 
-M4, the UniFFI bridge. Two things to do first, both recorded:
+M5, the macOS menu bar app, which is where Bazel finally enters. Two things first:
 
 1. Read [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)
    before writing `MODULE.bazel`. MSRV is 1.95 and the sibling projects pin a `rules_rust` that
-   predates it.
+   predates it. None of them has a `macos_application` target either, so that part is new ground.
 2. Confirm the SigNoz adapter against a live instance with one `query_range` call — see the open
    questions in [`plans/2026-09-06-m3-signoz-query-adapter.md`](plans/2026-09-06-m3-signoz-query-adapter.md).
+   This is now the last unverified thing in the read path.
 
 One thing the client core cannot check and M4 must not forget: nothing detects an unwired
 `SignozConfig::for_policy`, and the symptom is a healthy fleet silently reading stale or down with

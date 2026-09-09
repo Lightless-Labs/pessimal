@@ -121,3 +121,43 @@ jobs:
 
       - name: Export over HTTP/protobuf
         run: ./scripts/ci-export-smoke.sh http/protobuf http://localhost:4318
+
+  # ==========================================================================
+  # The generated Swift bindings are build outputs that are committed, so they
+  # can go stale silently: a stale .swift means a Rust signature change has no
+  # effect, because the iOS build compiles the committed file rather than the
+  # code. Regenerate and diff, so a forgotten `./tools/uniffi/regen.sh` fails
+  # here rather than at someone's next Xcode build.
+  #
+  # Also runs the Swift smoke test, which is the only check that drives the FFI
+  # boundary from Swift's own executor -- the thing no Rust test can do.
+  # macOS-only, hence its own job.
+  # ==========================================================================
+  bindings:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          key: bindings
+
+      - name: Regenerate the Swift bindings
+        run: ./tools/uniffi/regen.sh
+
+      - name: Fail if the committed bindings are stale
+        run: |
+          if ! git diff --exit-code -- clients/apple/PessimalFFI/Sources; then
+            echo "::error::the committed Swift bindings do not match the Rust source."
+            echo "Run ./tools/uniffi/regen.sh and commit both generated files together."
+            exit 1
+          fi
+
+      - name: Drive the FFI boundary from Swift
+        run: ./scripts/swift-smoke.sh
