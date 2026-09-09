@@ -86,6 +86,22 @@ pub fn extra_dimensions(kind: MetricKind) -> &'static [&'static str] {
 /// cumulative sum is not something we have confirmed SigNoz allows. That matters more than it
 /// looks: `check_connection` queries the heartbeat, so a rejected aggregation would fail the "test
 /// connection" button on a perfectly good connection.
+/// The temporality a metric must be queried with.
+///
+/// This is not cosmetic and not optional. A cumulative sum queried as `Unspecified` returns
+/// `aggregations: null` — no error, no warning, just nothing — so the whole fleet reads as absent.
+/// Verified against a live SigNoz Cloud instance: every gauge returns data only under
+/// `Unspecified`, and every counter only under `Cumulative`.
+#[must_use]
+pub fn temporality_for(kind: MetricKind) -> &'static str {
+    match kind.instrument_kind() {
+        // A gauge has no temporality; SigNoz stores it as unspecified and matches it literally.
+        InstrumentKind::Gauge => "Unspecified",
+        // Every counter the agent exports is a cumulative OTLP Sum.
+        InstrumentKind::Counter => "Cumulative",
+    }
+}
+
 #[must_use]
 pub fn aggregation_for(kind: MetricKind) -> (&'static str, &'static str) {
     match kind.instrument_kind() {
@@ -165,6 +181,30 @@ mod tests {
         let keys = MetricNaming::Underscored.group_by(MetricKind::FilesystemUsage);
         assert!(keys.contains(&"system_filesystem_mountpoint".to_owned()));
         assert!(!keys.iter().any(|k| k.contains('.')));
+    }
+
+    #[test]
+    fn gauges_are_queried_as_unspecified_and_counters_as_cumulative() {
+        // Verified against a live instance: the wrong one returns no series at all, silently.
+        assert_eq!(temporality_for(MetricKind::CpuUtilization), "Unspecified");
+        assert_eq!(temporality_for(MetricKind::MemoryUsage), "Unspecified");
+        assert_eq!(temporality_for(MetricKind::NetworkIo), "Cumulative");
+        assert_eq!(temporality_for(MetricKind::AgentHeartbeat), "Cumulative");
+        assert_eq!(
+            temporality_for(MetricKind::AgentCollectionFailures),
+            "Cumulative"
+        );
+    }
+
+    #[test]
+    fn every_metric_has_a_temporality_matching_its_instrument_kind() {
+        for kind in MetricKind::ALL {
+            let expected = match kind.instrument_kind() {
+                InstrumentKind::Gauge => "Unspecified",
+                InstrumentKind::Counter => "Cumulative",
+            };
+            assert_eq!(temporality_for(kind), expected, "{kind}");
+        }
     }
 
     #[test]
