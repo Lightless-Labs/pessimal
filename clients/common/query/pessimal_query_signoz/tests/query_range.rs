@@ -703,3 +703,14 @@ fn a_trailing_slash_does_not_produce_a_double_slash_in_the_path() {
 /// Silences the unused-import warning for `Request`, which documents the recorded type.
 #[allow(dead_code)]
 fn _recorded_request_type(_: &Request) {}
+
+#[test]
+fn building_two_clients_does_not_panic_on_the_crypto_provider() {
+    // reqwest's `rustls-no-provider` feature panics when a client is built with no provider
+    // installed, and `install_default` errors if one already is. Both paths have to be survivable:
+    // the first client installs it, the second must not trip over that.
+    let first = SignozQuery::new(SignozConfig::new("https://a.test", API_KEY).expect("valid"));
+    assert!(first.is_ok());
+    let second = SignozQuery::new(SignozConfig::new("https://b.test", API_KEY).expect("valid"));
+    assert!(second.is_ok());
+}

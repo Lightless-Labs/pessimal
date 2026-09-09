@@ -156,6 +156,25 @@ impl SignozConfig {
     }
 }
 
+/// Installs rustls's crypto provider, once per process.
+///
+/// The manifest selects `reqwest/rustls-no-provider`, which means exactly what it says: reqwest
+/// installs no provider and *panics* when a client is built without one. A panic here would cross
+/// UniFFI as an app crash on the user's first poll, so it is installed here rather than left to
+/// whoever happens to build a client first.
+///
+/// Idempotent and infallible by design. `install_default` returns `Err` when a provider is already
+/// installed — by another crate, another adapter, or an earlier call — and that is a success for our
+/// purposes: something usable is in place. `Once` makes concurrent first calls safe.
+pub fn install_crypto_provider() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        // ring rather than aws-lc-rs: the clients cross-compile to iOS and Android, where aws-lc-rs
+        // is the usual source of build grief. See the manifest for the full reasoning.
+        let _already_installed = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Reads metrics back out of SigNoz.
 ///
 /// `Debug` is safe to use: the config it holds redacts its API key.
@@ -171,9 +190,11 @@ impl SignozQuery {
     pub fn new(config: SignozConfig) -> Result<Self> {
         // Explicit, because `cargo test --workspace` unifies features and would otherwise
         // leave rustls enabled here, testing a different TLS stack than the one iOS ships.
-        // native-tls is explicit because `cargo test --workspace` unifies features and would
-        // otherwise leave rustls enabled here, testing a different TLS stack than the one iOS
-        // ships.
+        // TLS is left to reqwest's configured default, which the manifest pins to rustls with the
+        // ring provider and the platform verifier. It is NOT selected here: calling
+        // `use_native_tls()` or `use_rustls_tls()` hardcodes a stack into code that has to build
+        // for macOS, iOS, Android, Linux and Windows, and the right answer differs per platform
+        // only in ways the manifest already expresses.
         //
         // Redirects are refused outright. The API key travels in a custom SIGNOZ-API-KEY header,
         // and reqwest only strips `Authorization` across a host change — a custom header would be
@@ -183,8 +204,9 @@ impl SignozQuery {
         // The timeout is not optional either: reqwest has none by default, so a hung SigNoz would
         // hang the caller forever, and `CoreError::Unreachable` could never be produced by a
         // timeout.
+        install_crypto_provider();
+
         let http = Client::builder()
-            .use_native_tls()
             .timeout(config.request_timeout())
             .redirect(reqwest::redirect::Policy::none())
             .build()

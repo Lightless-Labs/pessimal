@@ -16,11 +16,28 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
-# native-tls, not rustls. The clients are Apple-only, so this uses Security.framework: no
-# aws-lc-rs to cross-compile for iOS, and it trusts the system store, which is what a self-hosted
-# SigNoz behind an internal CA needs. The agent's own reqwest features are irrelevant here — the
-# two are separate build graphs.
-reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
+# TLS for the client crates, which must cross-compile to macOS, iOS, Android, Linux and Windows.
+#
+# rustls with the *ring* provider plus `rustls-platform-verifier`, chosen over the two obvious
+# alternatives for reasons that are platform-specific rather than aesthetic:
+#
+# - NOT `native-tls`: on Linux and Android it wants a system OpenSSL, which is a build dependency
+#   the clients should not impose and a cross-compilation problem on Android in particular.
+# - NOT reqwest's default `rustls` feature: that pulls `aws-lc-rs`, which is the usual source of
+#   iOS and Android cross-compilation grief. The agent tolerates it because it is a server-side
+#   binary built for the host; a client cannot.
+#
+# `rustls-no-provider` gives the platform verifier without choosing a provider, so the provider is
+# declared here as `ring`. The verifier matters for a self-hosted SigNoz behind an internal CA:
+# bundled webpki roots alone would reject it, and asking every operator to paste a PEM would be a
+# worse answer than reading the trust store the device already has.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "rustls-no-provider",
+] }
+# Supplies rustls's crypto provider. With exactly one provider feature enabled, rustls resolves it
+# from the crate features and no explicit install call is needed.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -8,5 +8,5 @@ pub mod client;
 pub mod naming;
 pub mod wire;
 
-pub use client::{SignozConfig, SignozQuery};
+pub use client::{SignozConfig, SignozQuery, install_crypto_provider};
 pub use naming::MetricNaming;

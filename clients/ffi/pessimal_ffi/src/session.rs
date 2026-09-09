@@ -194,9 +194,18 @@ impl FleetSession {
         // (1) The step and the yardstick, taken from one place. See the method doc.
         let signoz = SignozConfig::for_policy(base_url, api_key, &config.tuning.liveness())?;
 
+        // `with_client` below bypasses SignozQuery::new, which is where the adapter would have
+        // installed rustls's crypto provider. reqwest's `rustls-no-provider` feature *panics* when
+        // a client is built without one, and a panic here crosses UniFFI as an app crash on the
+        // user's first poll, so install it before building. Idempotent.
+        pessimal_query_signoz::install_crypto_provider();
+
         // (2) The timeouts the adapter's own constructor would have set. See the method doc.
+        //
+        // TLS is left to reqwest's configured default, which the manifest pins to rustls with the
+        // ring provider and the platform verifier — not selected here, because this code builds for
+        // macOS, iOS, Android, Linux and Windows.
         let http = reqwest::Client::builder()
-            .use_native_tls()
             .timeout(signoz.request_timeout())
             .connect_timeout(CONNECT_TIMEOUT)
             .redirect(Policy::none())
