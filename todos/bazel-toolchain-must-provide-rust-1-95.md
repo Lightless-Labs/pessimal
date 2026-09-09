@@ -1,38 +1,42 @@
-# Bazel: unresolved, and not currently runnable on this machine
+# Bazel works, and `rules_rust` 0.74.0 provides Rust 1.95 — verified
 
-Pessimal's MSRV is 1.95, set by `sysinfo` rather than by choice, and the sibling projects all pin
-`rules_rust` 0.68.1, which predates it. Copying that pin is the obvious mistake to make.
+**Resolved 2026-09-09.** An earlier version of this note claimed Bazel could not be run here. That
+was wrong, and the owner was right to push back.
 
-## What was tried (2026-09-09)
+## What was actually wrong
 
-A minimal probe — `rules_rust` 0.74.0, `rust.toolchain(versions = ["1.95.0"])`, one `rust_binary`,
-Bazel 8.2.1 via bazelisk — to answer whether the toolchain can be provided at all.
+The build machine is an 11 GB VM that was running with ~2.8 GB free and 5.3 of 6 GB of swap in use.
+Bazel's server starts fine under that pressure but cannot finish initialising inside the client's
+default connect window, so the client gives up after 120s and reports that it could not connect. The
+earlier investigation read that as "Bazel does not work here" and stopped, which was a diagnosis
+from a symptom rather than a cause — and it never retried after clearing the stale servers.
 
-**It could not be run.** Bazel's server starts (its `jvm.out` shows only the usual deprecated-flag
-warning) but the client never connects, timing out after 120s against a fresh output base, in two
-different directories, with the agent sandbox both on and off. The sibling projects' `bazel-out`
-symlinks show Bazel works for the owner normally, so this is specific to the agent session rather
-than to the machine.
+## What works
 
-So the toolchain question is still open. What was established is narrower: `rules_rust` 0.74.0 is
-current (2026-08-28), and `rust/known_shas.bzl` no longer exists at that path in either 0.68.1 or
-0.74.0, so the version-resolution mechanism has changed and must be read rather than assumed.
+```bash
+bazelisk --host_jvm_args=-Xmx1500m --connect_timeout_secs=900 \
+  build --jobs=1 "--local_resources=memory=HOST_RAM*.3" //target
+```
 
-## What was done instead
+A minimal probe — `rules_rust` 0.74.0, `rust.toolchain(edition = "2024", versions = ["1.95.0"])`,
+one `rust_binary`, Bazel 8.2.1 — built successfully: 168 actions in 727s, and the produced binary
+runs. The toolchain it fetched reports `rustc 1.95.0 (59807616e 2026-04-14)`.
 
-The macOS app is built the way the sibling project **Descartes** builds and ships its notarized
-menu bar app: plain `swiftc`, a hand-assembled `.app` bundle, and an `Info.plist` template. No Xcode
-project, no Bazel, no `rules_apple`. Verified here — a SwiftUI `MenuBarExtra` compiles that way, and
-`swiftc` already links the Rust staticlib for `scripts/swift-smoke.sh`.
+So the MSRV concern is settled: **`rules_rust` 0.74.0 can provide Rust 1.95.0 under Bazel 8.2.1**,
+and it does not need a `sha256s` override. Pin 0.74.0, not the siblings' 0.68.1, which predates 1.95.
 
-That is a smaller, proven path for a menu bar app, and it removes this blocker from M5 entirely.
+The caveat is time, not capability: ~12 minutes for a hello-world under this memory pressure. Expect
+real builds to be slow here, and keep the JVM capped and `--jobs` low so Bazel does not compete with
+cargo for the little memory there is.
 
-## What still has to be decided
+## What is still open
 
-Bazel was an explicit requirement at the outset ("UniFFI + Bazel, you'll find docs and examples for
-that in the phil-connors and kumbaya projects"). The macOS app no longer needs it. **iOS (M6) is the
-real question**: App Store submission wants an Xcode project, which the siblings generate with
-`rules_xcodeproj`. The options are to bring Bazel back for iOS, to check in an Xcode project, or to
-generate one another way.
+The macOS app currently builds with plain `swiftc` (following the sibling project Descartes) rather
+than with `rules_apple`, because that path was taken while Bazel was believed unusable. It works, it
+is notarizable, and CI builds it. Whether to move it onto Bazel is now a choice rather than a
+constraint.
 
-Do not settle this by drifting. It needs the owner, and it needs Bazel to actually run somewhere.
+**iOS is the case that most wants Bazel**, since App Store submission wants an Xcode project and the
+siblings generate one with `rules_xcodeproj`. Two things to check before committing to that, neither
+of which was reached: whether `rules_apple` 4.3.3 is happy alongside `rules_rust` 0.74.0, and
+whether Bazel 8.2.1 remains the right pin (it was chosen because `rules_apple` is not Bazel 9 ready).
