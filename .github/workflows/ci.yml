@@ -161,3 +161,30 @@ jobs:
 
       - name: Drive the FFI boundary from Swift
         run: ./scripts/swift-smoke.sh
+
+      # The app is assembled by a script rather than an Xcode project, so nothing else would
+      # notice it stopped compiling. Building the bundle here is what keeps the Swift honest
+      # against a changing FFI surface -- a Rust signature change that breaks a view would
+      # otherwise only surface the next time somebody built it by hand.
+      - name: Build the macOS app bundle
+        run: ./scripts/build-macos-app.sh
+
+      - name: The bundle must be a real, self-contained UI-element app
+        run: |
+          APP=.build/macos/Pessimal.app
+          BIN="$APP/Contents/MacOS/Pessimal"
+          test -x "$BIN" || { echo "::error::no executable in the bundle"; exit 1; }
+          # Linking the dylib instead of the archive produces an app that runs only on the
+          # machine that built it, and only until the next cargo clean.
+          if otool -L "$BIN" | grep -q pessimal_ffi; then
+            echo "::error::the app links libpessimal_ffi dynamically; it must link the archive"
+            otool -L "$BIN"
+            exit 1
+          fi
+          if grep -q __PESSIMAL_ "$APP/Contents/Info.plist"; then
+            echo "::error::Info.plist still contains unsubstituted placeholders"
+            exit 1
+          fi
+          plutil -lint "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :LSUIElement' "$APP/Contents/Info.plist" | grep -qx true \
+            || { echo "::error::LSUIElement is not set; this would show a Dock icon"; exit 1; }

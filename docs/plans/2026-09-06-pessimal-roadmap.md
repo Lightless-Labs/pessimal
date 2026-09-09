@@ -63,9 +63,14 @@ via `scripts/swift-smoke.sh`.
 three sibling projects. See
 [`../solutions/uniffi-tokio-runtime-verified-from-swift.md`](../solutions/uniffi-tokio-runtime-verified-from-swift.md).
 
-### M5 — macOS menu bar app
-`MenuBarExtra` + `LSUIElement`, showing fleet liveness and per-host metrics. New ground: none of the
-sibling projects has a `macos_application` Bazel target.
+### M5 — macOS menu bar app ✅
+`MenuBarExtra` + `LSUIElement`, showing fleet liveness, per-host metrics, alerts and a freshness
+banner, with a settings window for the backend, poll interval and alert rules.
+
+Built with plain `swiftc` and a hand-assembled bundle, following the sibling project Descartes,
+rather than with Bazel and `rules_apple`. Bazel could not be made to run in the build environment at
+all, and Descartes already ships a notarized macOS app this way. **This departs from the original
+brief**; see [`../../todos/bazel-toolchain-must-provide-rust-1-95.md`](../../todos/bazel-toolchain-must-provide-rust-1-95.md).
 
 ### M6 — iOS app
 Fleet list, host detail, alert configuration. Shares `PessimalKit` with the menu bar app.

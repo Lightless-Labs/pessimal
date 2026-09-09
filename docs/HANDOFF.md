@@ -34,8 +34,16 @@
   `PESSIMAL_LIVE_SIGNOZ_URL` / `PESSIMAL_LIVE_SIGNOZ_KEY`:
   `pessimal_query_signoz --test live_signoz` for the adapter, and
   `pessimal_ffi --test live_round_trip` for the whole chain.
-- M5 onward (Bazel, the macOS menu bar app, the iOS app) is unstarted; `clients/apple/macos` and
-  `clients/apple/ios` still hold placeholders.
+- **M5 macOS menu bar app** — 23 Swift files at `clients/apple/macos/`, built to a real `.app` by
+  `scripts/build-macos-app.sh` with plain `swiftc`. Verified launching as a `UIElement` with no Dock
+  icon and a real status item. CI builds the bundle and asserts it is statically linked, has no
+  leftover plist placeholders, and keeps `LSUIElement`.
+- **Bazel is not used.** It could not be made to run here at all (see
+  [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)),
+  and the sibling project Descartes already ships a notarized macOS app with `swiftc` and a
+  hand-assembled bundle, so the app follows that. **This contradicts the original brief and is the
+  owner's to settle**, especially for iOS, where App Store submission wants an Xcode project.
+- M6 (the iOS app) is unstarted; `clients/apple/ios` still holds a placeholder.
 
 ## Verifying the agent locally
 
