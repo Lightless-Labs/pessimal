@@ -76,12 +76,30 @@ pub fn build_exporter(config: &AgentConfig) -> Result<MetricExporter> {
                 })?;
                 metadata.insert(key, value);
             }
-            MetricExporter::builder()
+            let builder = MetricExporter::builder()
                 .with_tonic()
                 .with_endpoint(&config.export.endpoint)
                 .with_timeout(timeout)
-                .with_metadata(metadata)
-                .build()
+                .with_metadata(metadata);
+
+            // Root certificates have to be supplied explicitly for a TLS endpoint.
+            //
+            // opentelemetry-otlp, given no TLS config and an https endpoint, falls back to a bare
+            // `ClientTlsConfig::new()` — which trusts nothing, so every handshake fails with
+            // `InvalidCertificate(UnknownIssuer)`. That is every cloud backend: SigNoz Cloud,
+            // Honeycomb, ClickStack. A plain-http collector must NOT get a TLS config, so this
+            // mirrors otlp's own scheme test rather than setting it unconditionally.
+            //
+            // `with_enabled_roots` activates whichever `tls-*-roots` feature is on, so this keeps
+            // compiling if that choice changes.
+            let builder = if config.export.endpoint.starts_with("https://") {
+                builder
+                    .with_tls_config(tonic::transport::ClientTlsConfig::new().with_enabled_roots())
+            } else {
+                builder
+            };
+
+            builder.build()
         }
         ExportProtocol::HttpProtobuf => {
             let headers: HashMap<String, String> = headers.into_iter().collect();

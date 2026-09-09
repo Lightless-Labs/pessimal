@@ -15,7 +15,14 @@ opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-tonic = { version = "0.14", default-features = false, features = ["transport"] }
+tonic = { version = "0.14", default-features = false, features = [
+    "transport",
+    # Needed for ClientTlsConfig::with_native_roots, which with_enabled_roots activates. Declared
+    # here rather than relied upon from opentelemetry-otlp's `tls-roots`, so a change to that
+    # crate's features cannot silently disarm TLS verification.
+    "tls-native-roots",
+    "tls-ring",
+] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
