@@ -86,6 +86,10 @@ The Apple apps will build with Bazel once they exist (M5 onward); there is no `M
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+GNU AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The agent is something you run on your own hosts and the apps talk only to your own backend, so the
+network clause costs an ordinary user nothing. It does mean that if you modify Pessimal and offer it
+to others — including as a hosted service — those changes have to be published too.
 
 [semconv]: https://opentelemetry.io/docs/specs/semconv/system/system-metrics/

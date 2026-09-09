@@ -5,7 +5,7 @@
 ## Current state
 
 - **M0 scaffold** — done. Cargo workspace across `common/`, `agents/`, `clients/`, `tools/`.
-  MIT, conventional commits via `cog`.
+  AGPL-3.0-or-later, conventional commits via `cog`.
 - **M1 domain core** — done. `pessimal_core` covers metric identity, instrument kinds, time ranges
   and series, liveness, alert evaluation, URNs, and ports.
 - **M2 host agent** — done. `pessimal_agent_core` (config, backend presets, cached collection,
