@@ -24,6 +24,10 @@ uniffi = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
+# Not for serialising anything of this crate's own: `FleetConfigRecord` carries its rule set as a
+# JSON array because `AlertRule`'s id is private with no setter, so `Deserialize` is the only
+# construction path that keeps a rule the same rule. See `config_records`.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

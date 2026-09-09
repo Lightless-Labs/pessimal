@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile and run a real Swift binary against the generated bindings and the Rust staticlib.
+# Compile and run a real Swift binary against the generated bindings and the Rust library.
 #
 #   ./scripts/swift-smoke.sh
 #
@@ -8,6 +8,13 @@
 # driven by *Swift's* executor rather than by a Rust test harness. The sibling projects each grew a
 # hand-rolled runtime.rs because that path fails silently — it hangs, it does not error — so the
 # only honest test is to drive it from Swift.
+#
+# It needs no backend, no credentials and no network: the session is pointed at 127.0.0.1:9, where
+# nothing listens, so the one real HTTP attempt is refused by the loopback stack immediately. That
+# refusal is exactly as good a reactor test as a successful GET and a great deal cheaper — reqwest
+# cannot complete *or* fail a TCP connect without a tokio IO driver under it — and it doubles as the
+# end-to-end check of §4.11's other load-bearing rule: a backend failure must arrive as *data* on a
+# view that still renders, never as a thrown Swift error.
 #
 # macOS only; needs a Swift toolchain. Not run on Linux CI.
 set -euo pipefail
@@ -24,21 +31,115 @@ cargo build -p pessimal_ffi
 cat > "$WORK/main.swift" <<'SWIFT'
 import Foundation
 
-// Awaiting from Swift's executor is the whole point: a Rust-side test would drive the future on a
-// tokio worker and prove nothing about the boundary.
-let sem = DispatchSemaphore(value: 0)
-var failed = false
-Task {
-    let probe = await pessimalSmokeProbe()
-    print("swift <- rust: \(probe)")
-    if probe.isEmpty { failed = true }
-    sem.signal()
+struct SmokeFailure: Error, CustomStringConvertible { let description: String }
+
+func check(_ holds: Bool, _ what: String) throws {
+    guard holds else { throw SmokeFailure(description: what) }
+    print("  ok  \(what)")
 }
-if sem.wait(timeout: .now() + 30) == .timedOut {
+
+func nowMillis() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+/// Port 9 is discard and nothing is bound to it; loopback needs no network. A connect is therefore
+/// refused at once, which `reqwest` reports as `is_connect()` and the SigNoz client maps to
+/// `CoreError::Unreachable`.
+let deadBackend = "http://127.0.0.1:9"
+
+func smoke() async throws {
+    // 1. A record crosses outward. These values were chosen by core's `FleetConfig::new`, not typed
+    //    here, so this also checks the lift of a nested record and two enum arrays.
+    let config = try fleetConfigDefaults(environment: "swift-smoke")
+    try check(config.environment == "swift-smoke", "a config record keeps its environment across the boundary")
+    try check(!config.overviewMetrics.isEmpty, "core chose the overview metrics")
+    try check(config.rulesJson == "[]", "a default config carries no rules")
+    try check(config.tuning.pollIntervalSeconds > 0, "the nested tuning record crossed too")
+
+    // 2. The composition root. No request is made here: `new` validates the config through core and
+    //    builds the timeout-carrying reqwest client.
+    let session = try FleetSession(
+        baseUrl: deadBackend,
+        apiKey: "swift-smoke-not-a-real-key",
+        config: config,
+        cachedStateJson: nil
+    )
+    try check(session.restoreReport() == nil, "no cache was handed in, so there is no restore report")
+
+    // 3. An exported `async fn` with no I/O in it at all, awaited on Swift's executor. This is
+    //    UniFFI's async plumbing and the Rust future's completion callback and nothing else — the
+    //    half of the boundary that still works when the reactor does not.
+    let warnings = try await session.setConfig(config: config)
+    try check(warnings.isEmpty, "core audited the default config and had nothing to warn about")
+
+    // 4. THE REASON THIS SCRIPT EXISTS. `poll` reaches `reqwest` through
+    //    `#[uniffi::export(async_runtime = "tokio")]`. With no reactor this neither returns nor
+    //    throws; it hangs, and the semaphore below is what notices.
+    let result = try await session.poll(nowMillis: nowMillis())
+    try check(!result.skipped, "nothing else held the in-flight guard")
+
+    // The failure is data, not an exception: the call returned normally and the view came with it.
+    guard let failure = result.view.freshness.lastFailure else {
+        throw SmokeFailure(description: "a refused poll must leave its failure on the view")
+    }
+    try check(failure.kind == .unreachable, "a refused TCP connect is unreachable, not unauthorized")
+    try check(failure.source == .roster, "the roster is the request that outranks the series ones")
+    try check(!failure.isActionable, "only an expired key routes the Open Settings button")
+    try check(result.view.freshness.polledThisSession, "the fold ran even though every request failed")
+    try check(result.view.hosts.isEmpty && result.view.counts.hosts == 0, "a failed poll never invents a fleet")
+    try check(result.transitions.isEmpty, "nothing was observed, so nothing transitioned")
+
+    guard case .retry(let afterSeconds, let consecutiveFailures) = result.advice else {
+        throw SmokeFailure(description: "an unreachable backend advises a retry, got \(result.advice)")
+    }
+    try check(afterSeconds > 0 && consecutiveFailures == 1, "core's backoff schedule, not this script's")
+
+    // 5. The synchronous reads a SwiftUI body makes, on the same session, without an await.
+    let view = session.view()
+    try check(view.asOfMillis != nil, "a failed poll still moves `as_of`")
+    try check(view.backendName == result.view.backendName, "`view()` projects the state the poll stored")
+
+    let freshness = try session.freshness(nowMillis: nowMillis())
+    guard case .unusable(let lastSuccess, let failures, let carried) = freshness else {
+        throw SmokeFailure(description: "a session that never saw a roster cannot claim its picture is believable, got \(freshness)")
+    }
+    try check(lastSuccess == nil, "there has never been a successful poll to be as of")
+    try check(failures == 1, "exactly the one poll above failed")
+    try check(carried?.kind == .unreachable, "the banner is handed the failure that routes its button")
+
+    // 6. The persistence round trip: the string one session exports is the string the next restores.
+    let exported = try session.exportState()
+    let restored = try FleetSession(
+        baseUrl: deadBackend,
+        apiKey: "swift-smoke-not-a-real-key",
+        config: config,
+        cachedStateJson: exported
+    )
+    guard let report = restored.restoreReport() else {
+        throw SmokeFailure(description: "a session given a cache reports what it salvaged")
+    }
+    try check(!report.discardedUnreadable && !report.discardedIncompatible,
+              "a state this very process exported restores cleanly")
+
+    print("swift <- rust: backend \(view.backendName), \(freshness)")
+}
+
+// Awaiting from Swift's executor is the whole point: a Rust-side test would drive the future on a
+// tokio worker and prove nothing about the boundary. The semaphore is the hang detector — an
+// unwired reactor does not error, it simply never completes.
+let finished = DispatchSemaphore(value: 0)
+Task {
+    do {
+        try await smoke()
+    } catch {
+        print("FAILED: \(error)")
+        exit(1)
+    }
+    finished.signal()
+}
+if finished.wait(timeout: .now() + 30) == .timedOut {
     print("TIMED OUT — the async export never completed, which is what an unwired reactor looks like")
     exit(2)
 }
-exit(failed ? 1 : 0)
+exit(0)
 SWIFT
 
 swiftc -O \
