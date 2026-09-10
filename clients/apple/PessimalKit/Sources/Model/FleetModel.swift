@@ -11,7 +11,12 @@
 //  a comparison against a number here, it belongs on the other side of the bridge.
 //
 
-import AppKit
+// AppKit only exists on macOS. This file is shared with the iOS app, where waking is a scene-phase
+// event the app layer reports rather than a notification this type can observe — hence the guards
+// below rather than two copies of the model.
+#if canImport(AppKit)
+    import AppKit
+#endif
 import Foundation
 import Observation
 
@@ -162,11 +167,14 @@ public final class FleetModel {
     /// `nonisolated(unsafe)` so `deinit` — which is not main-actor isolated — can unregister it.
     /// Written only on the main actor during ``start()``, and read once when the last reference is
     /// already gone, so there is no concurrent access to be unsafe about.
-    @ObservationIgnored private nonisolated(unsafe) var wakeObserver: (any NSObjectProtocol)?
+    #if canImport(AppKit)
+        @ObservationIgnored private nonisolated(unsafe) var wakeObserver: (any NSObjectProtocol)?
 
-    /// Captured on the main actor at construction so `deinit`, which is not main-actor isolated,
-    /// never has to touch `NSWorkspace.shared` from whichever thread released the last reference.
-    @ObservationIgnored private nonisolated let workspaceNotifications: NotificationCenter
+        /// Captured on the main actor at construction so `deinit`, which is not main-actor
+        /// isolated, never has to touch `NSWorkspace.shared` from whichever thread released the
+        /// last reference.
+        @ObservationIgnored private nonisolated let workspaceNotifications: NotificationCenter
+    #endif
 
     @ObservationIgnored private let observesSystemWake: Bool
 
@@ -194,13 +202,17 @@ public final class FleetModel {
         self.jitterFraction = jitterFraction
         self.observesSystemWake = observesSystemWake
         self.clock = clock
-        workspaceNotifications = NSWorkspace.shared.notificationCenter
+        #if canImport(AppKit)
+            workspaceNotifications = NSWorkspace.shared.notificationCenter
+        #endif
     }
 
     deinit {
-        if let wakeObserver {
-            workspaceNotifications.removeObserver(wakeObserver)
-        }
+        #if canImport(AppKit)
+            if let wakeObserver {
+                workspaceNotifications.removeObserver(wakeObserver)
+            }
+        #endif
     }
 
     // MARK: - Lifecycle
@@ -714,24 +726,30 @@ public final class FleetModel {
     /// ``resume()`` is idempotent, so a second owner wiring the same notification costs nothing.
     /// Pass `observesSystemWake: false` if the app layer would rather own it outright.
     private func observeSystemWake() {
-        guard wakeObserver == nil else { return }
-        wakeObserver = workspaceNotifications.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.isSuspended {
-                    // Suspended on purpose — the popover is closed. Waking is not a reason to
-                    // start polling behind a closed menu.
-                    return
+        #if canImport(AppKit)
+            guard wakeObserver == nil else { return }
+            wakeObserver = workspaceNotifications.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if self.isSuspended {
+                        // Suspended on purpose — the popover is closed. Waking is not a reason to
+                        // start polling behind a closed menu.
+                        return
+                    }
+                    // Re-arm from the stored deadline. If it passed while the machine slept, the wait
+                    // computes to zero and the poll happens now.
+                    self.arm()
                 }
-                // Re-arm from the stored deadline. If it passed while the machine slept, the wait
-                // computes to zero and the poll happens now.
-                self.arm()
             }
-        }
+        #else
+            // On iOS there is no wake notification to observe: the app is suspended rather than the
+            // machine, and the app layer reports it through `resume()` on a scene-phase change.
+            // Doing nothing here is correct, not a gap.
+        #endif
     }
 }
 

@@ -1,0 +1,43 @@
+# =============================================================================
+# Pessimal Bazel configuration
+# =============================================================================
+# Bazel builds the Apple clients. The agents build with Cargo.
+
+common --enable_bzlmod
+
+build --@rules_rust//rust/toolchain/channel=stable
+
+# =============================================================================
+# Apple targets
+# =============================================================================
+build:ios --apple_platform_type=ios
+
+build:ios_device --config=ios
+build:ios_device --platforms=//platforms:ios_arm64
+
+build:ios_sim --config=ios
+build:ios_sim --platforms=//platforms:ios_sim_arm64
+
+# =============================================================================
+# Memory
+# =============================================================================
+# The development machine is an 11 GB VM that runs with most of its swap in use, where the Bazel
+# server cannot finish starting inside the client's default connect window. These keep it from
+# competing with cargo for what little memory there is; raise them on a larger machine.
+startup --host_jvm_args=-Xmx1500m
+startup --connect_timeout_secs=900
+build --local_resources=memory=HOST_RAM*.4
+
+build --disk_cache=~/.cache/bazel-pessimal
+build --symlink_prefix=.bazel/
+
+# =============================================================================
+# CI
+# =============================================================================
+build:ci --show_progress_rate_limit=5
+build:ci --noshow_loading_progress
+build:ci --keep_going=false
+# Signing is unavailable on a hosted runner, so a CI build targets the simulator.
+build:ci --config=ios_sim
+
+test --test_output=errors

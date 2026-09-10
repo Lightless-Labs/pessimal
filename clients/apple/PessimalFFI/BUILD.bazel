@@ -1,0 +1,27 @@
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+
+# The generated UniFFI bindings, as two Bazel targets.
+#
+# Both files are build outputs that are committed (see tools/uniffi/regen.sh and the CI job that
+# diffs them). They are consumed here rather than generated here: no sibling project has managed a
+# bindgen genrule, and a stale-bindings CI check is the cheaper guarantee.
+
+# The C header, as a module the Swift can import. This is also where the Rust gets linked in: the
+# staticlib dependency is what makes the generated Swift's extern symbols resolve.
+objc_library(
+    name = "pessimal_ffiFFI",
+    hdrs = ["Sources/PessimalFFIFFI.h"],
+    includes = ["Sources"],
+    module_name = "PessimalFFIFFI",
+    visibility = ["//visibility:public"],
+    deps = ["//clients/ffi/pessimal_ffi:pessimal_ffi_static"],
+)
+
+swift_library(
+    name = "PessimalFFI",
+    srcs = ["Sources/PessimalFFI.swift"],
+    module_name = "PessimalFFI",
+    visibility = ["//visibility:public"],
+    deps = [":pessimal_ffiFFI"],
+)

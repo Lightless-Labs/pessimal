@@ -1,0 +1,15 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "pessimal_query_signoz",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"],
+    crate_name = "pessimal_query_signoz",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True) + ["//common/pessimal_core"],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)

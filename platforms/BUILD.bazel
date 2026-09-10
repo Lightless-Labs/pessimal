@@ -1,0 +1,32 @@
+# Target platforms for the Apple clients.
+#
+# Named rather than relying on --apple_platform_type so a build can say which it means, and so
+# .bazelrc configs stay readable.
+
+package(default_visibility = ["//visibility:public"])
+
+platform(
+    name = "ios_arm64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:ios",
+        "@build_bazel_apple_support//constraints:device",
+    ],
+)
+
+platform(
+    name = "ios_sim_arm64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:ios",
+        "@build_bazel_apple_support//constraints:simulator",
+    ],
+)
+
+platform(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:macos",
+    ],
+)

@@ -1,0 +1,74 @@
+"""Pessimal — host telemetry agents and clients.
+
+Bazel builds the Apple clients only. The agents build with Cargo, because Linux and Windows
+cross-compilation is far simpler that way and nothing about them needs Apple toolchains; see
+docs/plans/2026-09-06-pessimal-roadmap.md.
+"""
+
+module(
+    name = "pessimal",
+    version = "0.1.0",
+)
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+# This set is the one proven in the sibling projects (kumbaya, phil-connors, bande-a-bonnot), with
+# exactly one change: rules_rust is 0.74.0 rather than 0.68.1, because 0.68.1 predates Rust 1.95 and
+# 1.95 is this workspace's MSRV (set by sysinfo, not by choice). Verified: 0.74.0 fetches
+# rustc 1.95.0 and resolves alongside these apple/swift pins.
+#
+# apple_support must come BEFORE rules_cc for correct toolchain selection.
+bazel_dep(name = "apple_support", version = "2.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "rules_rust", version = "0.74.0")
+bazel_dep(name = "rules_apple", version = "4.3.3")
+bazel_dep(name = "rules_swift", version = "3.4.1")
+bazel_dep(name = "rules_xcodeproj", version = "3.0.0")
+# 1.1.0 rather than the siblings' 1.0.0: the resolved graph pulls 1.1.0 anyway, and asking for
+# 1.0.0 only produces a check_direct_dependencies warning on every build.
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# =============================================================================
+# Rust toolchain
+# =============================================================================
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-ios",  # device
+        "aarch64-apple-ios-sim",  # simulator on Apple silicon
+    ],
+    versions = ["1.95.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+# =============================================================================
+# Apple CC toolchain
+# =============================================================================
+apple_cc_configure = use_extension(
+    "@apple_support//crosstool:setup.bzl",
+    "apple_cc_configure_extension",
+)
+use_repo(apple_cc_configure, "local_config_apple_cc")
+
+# =============================================================================
+# Rust crate dependencies, from the same Cargo.lock cargo uses
+# =============================================================================
+# One lockfile for both build systems, so a dependency cannot differ between the cargo build that
+# CI runs and the Bazel build that ships the app.
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-apple-ios",
+        "aarch64-apple-ios-sim",
+    ],
+)
+use_repo(crate, "crates")

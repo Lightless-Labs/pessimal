@@ -31,3 +31,6 @@ nohup.out
 
 # Local SigNoz used only for capturing real query responses
 /dev/signoz/
+
+# Bazel
+/.bazel/

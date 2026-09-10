@@ -1,0 +1,22 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "pessimal_client_core",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"],
+    crate_name = "pessimal_client_core",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True) + ["//common/pessimal_core"],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
+rust_test(
+    name = "pessimal_client_core_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":pessimal_client_core",
+    edition = "2024",
+)
