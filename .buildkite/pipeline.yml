@@ -1,0 +1,198 @@
+# Pessimal on the self-hosted Apple silicon mini, through Tart guests.
+#
+# The shape is Descartes' (lightless-labs/public/descartes/.buildkite/pipeline.yml), because it is the
+# one verified on this cluster: the same pinned tart-ci plugin, the same two images, the same
+# concurrency groups, and the same rsync-into-the-guest checkout. The reasoning behind each of those
+# is recorded in the band's cookbook,
+# docs/solutions/ci-cd-patterns/2026-09-10-buildkite-self-hosted-ios-cicd-cookbook.md.
+#
+# GitHub Actions keeps the cross-platform matrix (Linux, macOS, Windows) and the collector smoke test,
+# which hosted runners do for free on a public repo. Buildkite exists here for what hosted runners
+# cannot do: build the iOS app and sign it.
+
+steps:
+  - label: ":linux: Rust workspace"
+    key: rust-linux
+    if: build.tag == null
+    # Linux guests are cheap and do not count against the macOS guest limit, so the Rust workspace
+    # runs here and leaves the single macOS slot for Bazel and the Apple bundles.
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      # Out of the shared mount before building. Cargo and Bazel both write heavily, and the mount is
+      # the one resource every concurrent guest shares.
+      work_dir="$$HOME/pessimal-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      cargo --version
+      # MSRV is 1.95, set by sysinfo. An older toolchain in the image fails here rather than in a
+      # confusing place later.
+      cargo fmt --all --check
+      cargo clippy --workspace --all-targets -- -D warnings
+      cargo test --workspace --locked
+
+  - label: ":bazel: iOS app"
+    key: ios-simulator
+    if: build.tag == null
+    # Exactly ONE macOS guest at a time, shared with every other macOS job. Two concurrent macOS VMs
+    # starve each other on this host; Descartes' pipeline records the build numbers where that was
+    # diagnosed. Do not raise this to get a faster pipeline.
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      # Bazel on the shared mount fails on hardlinks. rsync sidesteps it by not making any.
+      work_dir="$$HOME/pessimal-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      bazelisk build --config=ci //clients/apple/ios:Pessimal
+
+      # A Swift app that compiled but never linked the Rust would still produce a runnable bundle and
+      # fail at the first poll, so the symbols are the assertion, not the exit status.
+      ipa=".bazel/bin/clients/apple/ios/Pessimal.ipa"
+      test -f "$$ipa" || { echo "no ipa produced" >&2; exit 1; }
+      unpack="$$(mktemp -d)"
+      unzip -q "$$ipa" -d "$$unpack"
+      bin="$$unpack/Payload/Pessimal.app/Pessimal"
+      test -x "$$bin" || { echo "no executable in the bundle" >&2; exit 1; }
+      symbols="$$(nm -gU "$$bin" | grep -c uniffi_pessimal_ffi || true)"
+      echo "uniffi scaffolding symbols: $$symbols"
+      if [[ "$$symbols" -lt 1 ]]; then
+        echo "the iOS binary carries no uniffi symbols; the Rust core is not linked" >&2
+        exit 1
+      fi
+
+  - label: ":apple: macOS menu bar app"
+    key: macos-bundle
+    if: build.tag == null
+    depends_on: ios-simulator
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      work_dir="$$HOME/pessimal-macos-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      scripts/build-macos-app.sh
+      scripts/swift-smoke.sh
+
+  # ---------------------------------------------------------------------------
+  # Release. Gated on a tag, and unverified: see
+  # todos/ios-testflight-upload-is-unverified.md. Nothing below has ever run.
+  # ---------------------------------------------------------------------------
+  - block: ":lock: Ship this tag to TestFlight"
+    key: release-gate
+    if: build.tag =~ /^pessimal-ios-v[0-9]+\.[0-9]+\.[0-9]+$$/
+    prompt: |
+      This signs with the Apple Distribution certificate and uploads to TestFlight.
+      It has never completed. Confirm the App ID, the distribution profile named
+      com.lightless-labs.pessimal.ios, and the App Store Connect record all exist.
+
+  - label: ":rocket: iOS TestFlight"
+    key: ios-testflight
+    depends_on: release-gate
+    if: build.tag =~ /^pessimal-ios-v[0-9]+\.[0-9]+\.[0-9]+$$/
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+          # Holds a Doppler service token for lightless-labs-pessimal / prd_ios_deployment. The lane
+          # reads the secrets; the guest never sees the vault beyond this one config.
+          doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          env:
+            - BUILDKITE_TAG
+    artifact_paths:
+      - ".bazel/bin/clients/apple/ios/Pessimal.ipa"
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      shared_dir="$$(pwd)"
+      work_dir="$$HOME/pessimal-release-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$shared_dir/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # The version comes from the tag, never from a default, so a mis-tagged build cannot upload
+      # under the wrong number.
+      version="$${BUILDKITE_TAG#pessimal-ios-v}"
+      if [[ ! "$$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$$ ]]; then
+        echo "tag $$BUILDKITE_TAG does not carry a semver version" >&2
+        exit 1
+      fi
+
+      # macOS ships Ruby 2.6, where bundler cannot find fastlane at all. Fail on the version rather
+      # than on a confusing missing-gem error twenty lines later.
+      if command -v rbenv >/dev/null 2>&1; then
+        eval "$$(rbenv init - bash)"
+      fi
+      ruby_version="$$(ruby -e 'print RUBY_VERSION')"
+      expected="$$(tr -d '[:space:]' < .ruby-version)"
+      if [[ "$$ruby_version" != "$$expected" ]]; then
+        echo "ruby $$ruby_version, but .ruby-version asks for $$expected" >&2
+        exit 1
+      fi
+
+      bundle install --quiet
+      bundle exec fastlane pessimal_beta_testflight \
+        version:"$$version" \
+        build_number:"$$BUILDKITE_BUILD_NUMBER"
+
+      mkdir -p "$$shared_dir/.bazel/bin/clients/apple/ios"
+      rsync -a ".bazel/bin/clients/apple/ios/Pessimal.ipa" \
+        "$$shared_dir/.bazel/bin/clients/apple/ios/Pessimal.ipa"
