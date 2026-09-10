@@ -1,0 +1,173 @@
+# Pessimal iOS signing, build and TestFlight upload.
+#
+# Deliberately mirrors the sibling project Pocket Companion (bande-a-bonnot/fastlane/Fastfile): the
+# same secret names, the same lane shape, the same division of labour where fastlane owns signing and
+# Bazel owns the build. One Doppler deployment config can therefore serve both, and anyone who knows
+# one knows the other.
+#
+# Secrets come from Doppler project `lightless-labs-pessimal`, config `prd_ios_deployment`, read by
+# the same service account pocket-claw uses:
+#   APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64   Apple Distribution cert + key, base64 of a .p12
+#   APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD     that .p12's password
+#   APP_STORE_CONNECT_API_KEY_ID                App Store Connect API key id
+#   APP_STORE_CONNECT_API_KEY_ISSUER_ID         its issuer id
+#   APP_STORE_CONNECT_API_KEY_BASE64            the .p8, base64
+#   APPLE_TEAM_ID                               the team that owns them (PKPPLFK854, band-wide)
+#   GH_TOKEN                                    for the release notes and tag push
+#
+# Run a lane with the config injected:
+#   doppler run -p lightless-labs-pessimal -c prd_ios_deployment -- bundle exec fastlane pessimal_beta_testflight
+#
+# The project's other two configs belong to other jobs and are not read here: `prd_app-ios` holds
+# what the app itself needs at runtime, and `prd_macos_notarisation` serves scripts/notarize-macos-app.sh.
+#
+# The provisioning profile is NOT a stored secret: it is fetched from the portal read-only with the
+# App Store Connect key, so it cannot drift out of date in a vault.
+
+require "shellwords"
+require "base64"
+require "tempfile"
+
+default_platform(:ios)
+
+PROJECT_ROOT = File.expand_path("..", __dir__)
+
+IOS_APPS = {
+  pessimal: {
+    display_name: "Pessimal",
+    bundle_id: "com.lightless-labs.pessimal.ios",
+    profile_name: "com.lightless-labs.pessimal.ios",
+    bazel_target: "//clients/apple/ios:Pessimal",
+    ipa_path: File.join(PROJECT_ROOT, ".bazel", "bin", "clients/apple/ios", "Pessimal.ipa"),
+    tag_prefix: "pessimal-ios",
+    # Pessimal asks for nothing privileged: no background execution, no location, no push. If that
+    # changes, list the entitlement here so a profile missing it fails before the upload rather than
+    # at review.
+    required_profile_entitlements: {},
+  },
+}.freeze
+
+def ios_app!(key)
+  IOS_APPS.fetch(key) do
+    UI.user_error!("Unknown iOS app #{key.inspect}. Known apps: #{IOS_APPS.keys.join(', ')}")
+  end
+end
+
+def write_p12_to_temp
+  file = Tempfile.new(["dist_cert", ".p12"])
+  file.binmode
+  file.write(Base64.decode64(ENV.fetch("APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64")))
+  file.close
+  # Removed on exit however the lane ends: a distribution certificate left in a temp directory is a
+  # credential left behind.
+  at_exit { file.unlink rescue nil }
+  file.path
+end
+
+def configure_app_store_connect_api_key_if_present
+  asc_vars = %w[APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_KEY_ISSUER_ID APP_STORE_CONNECT_API_KEY_BASE64]
+  present = asc_vars.select { |v| ENV[v] && !ENV[v].empty? }
+  return if present.empty?
+
+  # All three or none. A partial set otherwise fails much later, inside sigh, with an error that
+  # names none of the missing variables.
+  missing = asc_vars - present
+  UI.user_error!("Incomplete App Store Connect API key config: missing #{missing.join(', ')}") if missing.any?
+
+  app_store_connect_api_key(
+    key_id: ENV.fetch("APP_STORE_CONNECT_API_KEY_ID"),
+    issuer_id: ENV.fetch("APP_STORE_CONNECT_API_KEY_ISSUER_ID"),
+    key_content: ENV.fetch("APP_STORE_CONNECT_API_KEY_BASE64"),
+    is_key_content_base64: true,
+    in_house: false,
+  )
+end
+
+def fetch_ios_signing(app)
+  configure_app_store_connect_api_key_if_present
+
+  if ENV["CI"]
+    import_certificate(
+      certificate_path: write_p12_to_temp,
+      certificate_password: ENV.fetch("APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD"),
+      keychain_name: "fastlane_tmp_keychain",
+    )
+  end
+
+  # readonly: never create or regenerate a profile from CI. A profile silently recreated on a build
+  # machine is how a team ends up with several and no idea which one ships.
+  profile_result = get_provisioning_profile(
+    app_identifier: app.fetch(:bundle_id),
+    provisioning_name: app.fetch(:profile_name),
+    readonly: true,
+  )
+  profile_path = profile_result if profile_result && File.exist?(profile_result)
+  profile_path ||= Actions.lane_context[SharedValues::SIGH_PROFILE_PATH]
+  unless profile_path && File.exist?(profile_path)
+    UI.user_error!("No provisioning profile for #{app.fetch(:display_name)} (#{app.fetch(:bundle_id)})")
+  end
+  profile_path
+end
+
+def build_ios_app(app, options)
+  variant = options[:variant] || "beta"
+  version = options[:version] || "0.1.0"
+  build_number = options[:build_number] || ENV["GITHUB_RUN_NUMBER"] || ENV["BUILDKITE_BUILD_NUMBER"] || "1"
+
+  unless version.match?(/\A\d+\.\d+\.\d+\z/)
+    UI.user_error!("Invalid version #{version.inspect}; expected semver such as 1.2.3")
+  end
+
+  bazel_args = [
+    "build", app.fetch(:bazel_target),
+    "--config=#{variant.shellescape}",
+    "--config=ios_device",
+    "--embed_label=#{version}.#{build_number.to_s.shellescape}",
+    "--ios_multi_cpus=arm64",
+  ]
+
+  sh("bazelisk", *bazel_args)
+
+  ipa_path = app.fetch(:ipa_path)
+  UI.user_error!("No ipa at #{ipa_path} after a successful build") unless File.exist?(ipa_path)
+  ipa_path
+end
+
+def upload_ios_testflight(app, options)
+  configure_app_store_connect_api_key_if_present
+  upload_to_testflight(
+    ipa: app.fetch(:ipa_path),
+    app_identifier: app.fetch(:bundle_id),
+    changelog: options[:changelog] || "Pessimal beta build.",
+    skip_waiting_for_build_processing: !options[:wait_for_build_processing],
+  )
+end
+
+platform :ios do
+  desc "Import the distribution certificate and fetch the provisioning profile"
+  lane :pessimal_fetch_signing do
+    fetch_ios_signing(ios_app!(:pessimal))
+  end
+
+  desc "Build the Pessimal ipa for a device"
+  lane :pessimal_build do |options|
+    build_ios_app(ios_app!(:pessimal), options)
+  end
+
+  desc "Upload an already-built Pessimal ipa to TestFlight"
+  lane :pessimal_upload_testflight do |options|
+    upload_ios_testflight(ios_app!(:pessimal), options)
+  end
+
+  desc "Sign, build and upload a Pessimal beta to TestFlight"
+  lane :pessimal_beta_testflight do |options|
+    app = ios_app!(:pessimal)
+    fetch_ios_signing(app)
+    build_ios_app(app, options)
+    upload_ios_testflight(
+      app,
+      changelog: options[:changelog],
+      wait_for_build_processing: options[:wait_for_build_processing],
+    )
+  end
+end

@@ -1,0 +1,12 @@
+# The Apple Developer team that owns the distribution certificate and the provisioning profile.
+#
+# Taken from the environment rather than hardcoded, because it is a property of the account and not
+# of this repository, and because the value belongs with the other signing secrets in Doppler. Set
+# APPLE_TEAM_ID in the iOS deployment config.
+#
+# Note for whoever fills it in: the sibling project Pocket Companion signs under PKPPLFK854, and
+# Descartes' bundle identifier nests both organisation names, which suggests one Apple team covers
+# Bande à Bonnot and Lightless Labs alike. Confirm it rather than assume it — a wrong team id fails
+# late, at profile fetch, with an error about the profile not existing.
+team_id(ENV["APPLE_TEAM_ID"]) if ENV["APPLE_TEAM_ID"]
+app_identifier("com.lightless-labs.pessimal.ios")
