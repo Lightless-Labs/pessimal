@@ -216,19 +216,31 @@ def fetch_ios_signing(app)
     UI.important("No APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64; relying on the login keychain")
   end
 
-  # readonly: never create or regenerate a profile from CI. A profile silently recreated on a build
-  # machine is how a team ends up with several and no idea which one ships.
-  profile_result = get_provisioning_profile(
-    app_identifier: app.fetch(:bundle_id),
-    provisioning_name: app.fetch(:profile_name),
-    readonly: true,
-  )
-  profile_path = profile_result if profile_result && File.exist?(profile_result)
-  profile_path ||= Actions.lane_context[SharedValues::SIGH_PROFILE_PATH]
-  unless profile_path && File.exist?(profile_path)
-    UI.user_error!("No provisioning profile for #{app.fetch(:display_name)} (#{app.fetch(:bundle_id)})")
+  # The profile is installed by scripts/asc.py, not by sigh. Two reasons: sigh can create or
+  # regenerate one, which is how a team ends up with several and no idea which one ships, and going
+  # through the App Store Connect API directly means the failure names every profile the key can
+  # actually see instead of only saying "no matching profile found".
+  profile_path = installed_profile_path(app.fetch(:profile_name))
+  unless profile_path
+    UI.user_error!(
+      "No provisioning profile named #{app.fetch(:profile_name)} is installed. " \
+      "Run: scripts/asc.py install-profile --name #{app.fetch(:profile_name)}"
+    )
   end
+  UI.message("using the installed profile at #{profile_path}")
   profile_path
+end
+
+# Bazel's `local_provisioning_profile` matches the Name *inside* the profile rather than the filename,
+# so this looks the same way: decode each one and read its Name.
+def installed_profile_path(profile_name)
+  directory = File.expand_path("~/Library/MobileDevice/Provisioning Profiles")
+  Dir.glob(File.join(directory, "*.mobileprovision")).find do |candidate|
+    plist = `security cms -D -i #{candidate.shellescape} 2>/dev/null`
+    next false if plist.empty?
+    match = plist[%r{<key>Name</key>\s*<string>(.*?)</string>}m, 1]
+    match == profile_name
+  end
 end
 
 def build_ios_app(app, options)

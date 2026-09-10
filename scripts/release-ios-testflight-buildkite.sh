@@ -138,6 +138,12 @@ fetch_secret GITHUB_TOKEN optional
 # spawns: it opens the whole config, while everything below needs only what was just read.
 unset DOPPLER_TOKEN
 
+# Install the distribution profile where both Bazel and codesign look for it. Doing this here rather
+# than inside the lane means a missing or misnamed profile is reported against every profile the key can
+# see, before a single minute of Bazel is spent.
+echo "--- fetching the distribution profile from App Store Connect"
+scripts/asc.py install-profile --name com.lightless-labs.pessimal.ios
+
 echo "--- signing and uploading Pessimal $VERSION ($BUILD_NUMBER)"
 exec bundle exec fastlane pessimal_beta_testflight \
   version:"$VERSION" \
