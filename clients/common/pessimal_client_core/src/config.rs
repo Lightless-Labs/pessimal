@@ -15,6 +15,13 @@
 //! produces a *plausible-looking* fleet that is wrong: a `max_staleness` under three metric steps
 //! makes `AlertEvaluation::observe` return `NoData` on a perfectly successful poll, because the
 //! freshest complete SigNoz bucket is already `[step, 2*step)` old before any poll latency.
+//!
+//! `max_staleness` is the part of that budget this machine is responsible for. The bound alerts are
+//! actually gated at is [`PollTuning::evidence_horizon`], which adds
+//! [`PollTuning::backend_lag_allowance`] — the part the *backend* is responsible for — for the same
+//! reason liveness is judged as of `now - backend_lag_allowance`. Every interlock here is written
+//! against the raw fields, and the `# Errors` list on [`PollTuning::new`] records why each of them
+//! still says what it meant once the allowance is in play.
 
 use chrono::Duration;
 use pessimal_core::{AlertRule, HostId, HostSelector, LivenessPolicy, MetricKind};
@@ -90,7 +97,7 @@ const PRESET_BACKEND_LAG_ALLOWANCE_MINUTES: i64 = 3;
 ///
 /// A year is generous rather than tuned — the preset's longest duration is `forget_host_after` at
 /// 24 hours — and it leaves every derived window (at most about four times the largest field, now
-/// that the roster and detail windows carry the lag allowance too)
+/// that all three of the roster, detail and overview windows carry the lag allowance)
 /// five orders of magnitude below the overflow threshold.
 pub const MAX_TUNING_DURATION: Duration = Duration::days(365);
 
@@ -143,9 +150,13 @@ impl PollTuning {
     /// [`ClientError::InvalidTuning`] unless every interlock holds:
     /// `poll_interval > 0`; `metric_step >= 1s` (the adapter truncates with
     /// `num_seconds().max(1)`); `3 * metric_step <= max_staleness` (the freshest complete SigNoz
-    /// bucket is already `[step, 2*step)` old before poll latency);
-    /// `max_staleness <= liveness.down_threshold()` (an alert must not outlive liveness);
-    /// `chart_window >= max_staleness + metric_step`;
+    /// bucket is already `[step, 2*step)` old before poll latency, and a zero lag allowance —
+    /// correct for a loopback collector — leaves this the whole of
+    /// [`PollTuning::evidence_horizon`]);
+    /// `max_staleness <= liveness.down_threshold()` (an alert must not outlive liveness; both
+    /// sides gain the lag allowance in use, so the comparison holds on the effective bounds too);
+    /// `chart_window >= max_staleness + metric_step` (which makes `detail_window` outreach the
+    /// evidence horizon by a step, since both of those carry the allowance as well);
     /// `backend_lag_allowance >= 0` (it is a delay the backend imposes, never a head start);
     /// `forget_host_after >= liveness.down_threshold()`;
     /// `staleness_tolerance() <= freshness_budget()` (so the freshness ladder cannot invert);
@@ -322,10 +333,60 @@ impl PollTuning {
         summed(self.chart_window, self.backend_lag_allowance)
     }
 
-    /// `max_staleness() + 2 * metric_step()` — about seven buckets at defaults.
+    /// `max_staleness() + backend_lag_allowance()` — how old the newest sample may be before an
+    /// alert stops counting it as evidence and reports
+    /// [`pessimal_core::AlertState::NoData`].
+    ///
+    /// Identically: `max_staleness` measured from `now - backend_lag_allowance()`, the same
+    /// shifted instant liveness is judged as of. `now - point.at <= max_staleness + lag` and
+    /// `(now - lag) - point.at <= max_staleness` are the same inequality, and the second is the
+    /// one that explains it. The gate's job is to reject samples *nobody is refreshing*, and
+    /// "nobody is refreshing it" can only be measured from the latest instant the backend could
+    /// have answered for — which is not `now`. Measured against SigNoz Cloud the newest queryable
+    /// sample was 118 seconds old (88s of ingestion lag plus a 30-second bucket stamped at its
+    /// start) on a host exporting every five seconds, so a gate at `max_staleness` alone left
+    /// thirty seconds of margin and a backend 160 seconds behind put every alert on a perfectly
+    /// healthy fleet at `NoData` while [`PollTuning::backend_lag_allowance`] kept liveness reading
+    /// `Alive`. A fleet that looks healthy and has silently stopped alerting is worse than one that
+    /// looks stale.
+    ///
+    /// This is expressed as a *horizon* rather than by handing `AlertEvaluation::observe` the
+    /// shifted instant, because that one argument does three jobs: it bounds the gate, it selects
+    /// the sample (`MetricSeries::latest_at` discards everything newer than it), and it anchors
+    /// dwell (`now - since >= for_duration`). Shifting it would throw away the freshest sample —
+    /// the very one this exists to admit — judge on one a whole allowance older, and delay every
+    /// fire by the allowance; on a loopback collector, where the lag is genuinely zero and the
+    /// allowance is not, it would read `NoData` off perfect data. Only the gate wants the shift.
+    ///
+    /// Widening it costs detection latency on a dead agent and nothing else, exactly as the
+    /// allowance costs liveness a late `Down`: an alert on a host that has gone silent holds its
+    /// last verdict for this long instead of `max_staleness`. The two now expire together — see
+    /// the `max_staleness <= down_threshold` interlock, which is unchanged because both of its
+    /// sides gain the same allowance.
+    #[must_use]
+    pub fn evidence_horizon(&self) -> Duration {
+        summed(self.max_staleness, self.backend_lag_allowance)
+    }
+
+    /// `evidence_horizon() + 2 * metric_step()` — about thirteen buckets at defaults.
+    ///
+    /// The horizon rather than `max_staleness` alone, so the *gate* is what bounds how old a
+    /// judged sample may be and the window is merely wide enough to contain it. A window narrower
+    /// than the horizon silently becomes the real bound, and it is a bound that differs per tier:
+    /// the focused host's [`PollTuning::detail_window`] is an hour wide, so two hosts with
+    /// identical data would reach different verdicts depending on which one the user happened to
+    /// have open. It also has to outreach the lag for the same reason
+    /// [`PollTuning::host_window`] does — a window ending at `now` whose span is only what the
+    /// fleet logically needs sits mostly *behind* the newest queryable bucket, and at the edge
+    /// that bucket intermittently falls outside it.
+    ///
+    /// The extra history this fetches is exactly what the gate then refuses, which is the point:
+    /// `observe` seeds `breaching_since` from a point's own timestamp, so a window that reaches
+    /// past the horizon would otherwise let a sample nobody is refreshing seed dwell and fire a
+    /// breach that had already ended. The gate binds first, in both tiers.
     #[must_use]
     pub fn overview_window(&self) -> Duration {
-        summed(self.max_staleness, scaled(self.metric_step, 2))
+        summed(self.evidence_horizon(), scaled(self.metric_step, 2))
     }
 
     /// `2 * poll_interval() + metric_step()` — two missed polls plus a bucket. Past this the
@@ -449,6 +510,14 @@ impl PollTuning {
                 self.metric_step.num_milliseconds()
             )));
         }
+        // Both of the next two bound `max_staleness`, which is the *non-lag* part of the evidence
+        // budget: what the fold adds to it is `backend_lag_allowance`, and both of these interlocks
+        // survive that addition for a different reason.
+        //
+        // The floor stays necessary. `backend_lag_allowance` may legitimately be zero — that is the
+        // right value for a collector on loopback — and then `evidence_horizon()` is exactly
+        // `max_staleness`, so this is the whole of what keeps a successful poll of a healthy host
+        // from reading NoData on bucket quantisation alone.
         let three_steps = scaled(self.metric_step, 3);
         if self.max_staleness < three_steps {
             return Err(ClientError::InvalidTuning(format!(
@@ -458,6 +527,13 @@ impl PollTuning {
                 three_steps.num_seconds()
             )));
         }
+        // The ceiling stays *correct*, unchanged, because the allowance lands on both sides of it
+        // and cancels. What it protects is the ordering of two effective bounds: alert evidence
+        // expires at `max_staleness + allowance` after a host's last sample, and liveness calls
+        // that host Down at `down_threshold + allowance` after its last heartbeat. Comparing the
+        // raw fields compares those two, and an alert that outlived liveness would keep firing on a
+        // host the app had already given up on. At the preset the two are equal, so evidence runs
+        // out on the same second the verdict turns Down.
         if self.max_staleness > self.liveness.down_threshold() {
             return Err(ClientError::InvalidTuning(format!(
                 "max staleness {}s must not outlive the liveness down threshold ({}s)",
@@ -664,7 +740,13 @@ impl FleetConfig {
         let mut warnings = Vec::new();
         for rule in &self.rules {
             let rule_id = rule.id().to_string();
-            if rule.for_duration() < self.tuning.max_staleness() {
+            // The evidence horizon, not `max_staleness`: "old but still valid" means "admitted by
+            // the gate", and the gate budgets for the backend's ingestion lag. A dwell between the
+            // two is every bit as spike-fireable as one below `max_staleness` — one sample that old
+            // seeds `since` that far back and arrives already past the dwell — so a warning
+            // thresholded on the narrower bound would go quiet over exactly the band the lag
+            // allowance opened up.
+            if rule.for_duration() < self.tuning.evidence_horizon() {
                 warnings.push(TuningWarning::SpikeCanFire {
                     rule_id: rule_id.clone(),
                     rule_name: rule.name.clone(),
@@ -764,9 +846,10 @@ impl From<FleetConfig> for FleetConfigWire {
 /// the something its author expected. Refusing the config would be worse than explaining it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TuningWarning {
-    /// `rule.for_duration() < tuning.max_staleness()`: because `observe` sets `since = point.at`
+    /// `rule.for_duration() < tuning.evidence_horizon()`: because `observe` sets `since = point.at`
     /// on a fresh breach, one sample that is old-but-still-valid carries the rule straight to
-    /// `Firing` with no further evidence.
+    /// `Firing` with no further evidence. The horizon is the oldest a sample can be and still be
+    /// judged, so it is the longest dwell one sample can satisfy by itself.
     SpikeCanFire { rule_id: String, rule_name: String },
     /// A rule on `NetworkIo` / `AgentCollectionFailures`: the threshold is compared against the
     /// normalised rate or delta, not the cumulative total the backend returns.
@@ -818,8 +901,8 @@ mod tests {
         Duration::seconds(count)
     }
 
-    /// A rule whose dwell comfortably exceeds the default `max_staleness`, so it contributes no
-    /// `SpikeCanFire` noise to an audit that is testing something else.
+    /// A rule whose dwell comfortably exceeds the default evidence horizon (330s), so it
+    /// contributes no `SpikeCanFire` noise to an audit that is testing something else.
     fn quiet_rule(name: &str, metric: MetricKind) -> AlertRule {
         AlertRule::new(
             "prod",
@@ -827,7 +910,7 @@ mod tests {
             metric,
             Comparator::GreaterThan,
             0.9,
-            secs(300),
+            secs(600),
         )
         .expect("valid rule")
     }
@@ -1106,13 +1189,14 @@ mod tests {
 
         assert_eq!(tuning.host_window(), secs(390)); // down 150 + 2 * 30 + lag 180
         assert_eq!(tuning.detail_window(), secs(3780)); // chart 3600 + lag 180
-        assert_eq!(tuning.overview_window(), secs(210)); // staleness 150 + 2 * 30
+        assert_eq!(tuning.evidence_horizon(), secs(330)); // staleness 150 + lag 180
+        assert_eq!(tuning.overview_window(), secs(390)); // horizon 330 + 2 * 30
         assert_eq!(tuning.staleness_tolerance(), secs(90)); // 2 * 30 + 30
         assert_eq!(tuning.freshness_budget(), secs(150)); // the down threshold itself
         assert_eq!(
             tuning.overview_window().num_seconds() / tuning.metric_step().num_seconds(),
-            7,
-            "the fleet-wide window is about seven buckets"
+            13,
+            "the fleet-wide window is about thirteen buckets"
         );
 
         // Move one input and only the windows derived from it move.
@@ -1128,13 +1212,14 @@ mod tests {
         )
         .expect("valid tuning");
 
-        assert_eq!(finer.overview_window(), secs(170)); // staleness 150 + 2 * 10
+        assert_eq!(finer.overview_window(), secs(350)); // horizon 330 + 2 * 10
         assert_eq!(finer.staleness_tolerance(), secs(70)); // 2 * 30 + 10
         assert_eq!(finer.host_window(), secs(390)); // liveness- and lag-derived, unchanged
 
-        // The lag allowance moves exactly the two windows that have to outreach it, and nothing
-        // else: a local collector has no lag, and a tuning that says so plans the narrow windows
-        // the earlier analysis assumed.
+        // The lag allowance moves every window that has to outreach it — the roster's, the focused
+        // host's, and the fleet-wide one the evidence gate is measured inside — and nothing else: a
+        // local collector has no lag, and a tuning that says so plans the narrow windows the
+        // earlier analysis assumed.
         let local = PollTuning::new(
             liveness(),
             secs(30),
@@ -1149,7 +1234,46 @@ mod tests {
 
         assert_eq!(local.host_window(), secs(210)); // down 150 + 2 * 30, no lag term
         assert_eq!(local.detail_window(), hours(1)); // exactly the charted span
-        assert_eq!(local.overview_window(), tuning.overview_window());
+        assert_eq!(local.overview_window(), secs(210)); // staleness 150 + 2 * 30, no lag term
+        assert_eq!(
+            local.evidence_horizon(),
+            local.max_staleness(),
+            "with no lag to budget for, the gate collapses to `max_staleness` itself — which is \
+             why `3 * metric_step <= max_staleness` is still the floor that keeps a successful \
+             poll from reading NoData"
+        );
+    }
+
+    /// The gate, not the window, has to be what bounds a judged sample's age.
+    ///
+    /// If the fleet-wide window were narrower than the horizon it would silently become the real
+    /// bound, and a per-tier one: the focused host's `detail_window` is an hour, so two hosts with
+    /// identical data would reach different alert verdicts depending on which one the user had
+    /// open. Derivation rather than a `check` rule, so it holds for every tuning that exists.
+    #[test]
+    fn both_query_tiers_reach_past_the_evidence_horizon_so_the_gate_is_what_binds() {
+        let hostile = PollTuning::new(
+            LivenessPolicy::new(secs(1), 3, 4).expect("valid policy"),
+            secs(1),
+            secs(1),
+            secs(5),
+            secs(3),
+            hours(12),
+            hours(24),
+            1,
+        )
+        .expect("an allowance thousands of times the staleness bound is still a valid tuning");
+
+        for tuning in [PollTuning::default(), hostile] {
+            assert!(
+                tuning.overview_window() > tuning.evidence_horizon(),
+                "the fleet-wide window must outreach the horizon, or the gate never binds"
+            );
+            assert!(
+                tuning.detail_window() > tuning.evidence_horizon(),
+                "and so must the focused host's, or its verdicts differ from everyone else's"
+            );
+        }
     }
 
     #[test]
@@ -1185,8 +1309,8 @@ mod tests {
     }
 
     #[test]
-    fn spike_can_fire_warns_when_dwell_is_below_max_staleness() {
-        // 60s of dwell under a 150s staleness bound: one old-but-valid sample fires it outright.
+    fn spike_can_fire_warns_when_dwell_is_below_the_evidence_horizon() {
+        // 60s of dwell under a 330s evidence horizon: one old-but-valid sample fires it outright.
         let spiky = AlertRule::new(
             "prod",
             "cpu spike",
@@ -1208,9 +1332,34 @@ mod tests {
             }]
         );
 
-        // The same rule with a dwell past the staleness bound is quiet.
+        // The same rule with a dwell past the horizon is quiet.
         let patient = quiet_rule("cpu sustained", MetricKind::CpuUtilization);
         assert!(config().with_rules(vec![patient]).audit().is_empty());
+
+        // The band the lag allowance opened: a 300-second dwell clears `max_staleness` and is
+        // still spike-fireable, because the gate now admits a sample up to 330 seconds old.
+        let between = AlertRule::new(
+            "prod",
+            "cpu patient-ish",
+            MetricKind::CpuUtilization,
+            Comparator::GreaterThan,
+            0.9,
+            secs(300),
+        )
+        .expect("valid rule");
+        assert!(
+            config().tuning.max_staleness() < between.for_duration()
+                && between.for_duration() < config().tuning.evidence_horizon(),
+            "the fixture has to sit between the two bounds for this to mean anything"
+        );
+        assert!(
+            matches!(
+                config().with_rules(vec![between]).audit().as_slice(),
+                [TuningWarning::SpikeCanFire { .. }]
+            ),
+            "a dwell the gate can satisfy from one sample must be warned about, whatever part of \
+             the horizon that sample's age came from"
+        );
     }
 
     #[test]

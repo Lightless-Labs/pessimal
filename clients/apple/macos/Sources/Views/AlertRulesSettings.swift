@@ -165,7 +165,11 @@ struct AlertRuleEditor: View {
     @State private var metric: MetricKindRecord = .cpuUtilization
     @State private var comparator: ComparatorRecord = .greaterThan
     @State private var threshold = ""
-    @State private var dwellSeconds = "300"
+    // 600s, not 300s: at preset tuning the evidence horizon is 330s, and a dwell below it
+    // audits as SpikeCanFire -- core warning that the rule may never fire, because the breach
+    // could begin and end between two samples it can still see. Defaulting to a value that
+    // warns teaches users to ignore the warning.
+    @State private var dwellSeconds = "600"
     @State private var scope: SelectorScope = .all
     @State private var hostID = ""
     @State private var hostList = ""

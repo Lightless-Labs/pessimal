@@ -98,11 +98,15 @@ pub struct PollPlan {
 /// `config.detail_metrics` with [`HostSelector::Host`] over `tuning.detail_window()`, emitted
 /// last. `host_range` is `tuning.host_window()` ending at `now`.
 ///
-/// Every window ends at `now` and is widened at the *start*. The two that have to reach past the
-/// backend's ingestion lag — the roster window and the focused host's detail window — carry
+/// Every window ends at `now` and is widened at the *start*. All three carry
 /// `tuning.backend_lag_allowance()` in their derivation, because a window ending at `now` whose
-/// span is only what the fleet logically needs is mostly behind the newest queryable point.
-/// Shortening the window's end instead would age every reading the fold then judges as current.
+/// span is only what the fleet logically needs is mostly behind the newest queryable point:
+/// directly for the roster window and the focused host's detail window, and through
+/// `tuning.evidence_horizon()` for the fleet-wide overview window, which has to hold every sample
+/// the alert gate is willing to judge — if it held fewer, the window rather than the gate would be
+/// deciding which alerts have evidence, and it would decide differently for the one host the user
+/// has open. Shortening a window's *end* instead would age every reading the fold then judges as
+/// current.
 ///
 /// **There is exactly one step in this crate**, and both tiers use it. The temptation is a
 /// coarser `chart_step` for the long focused window, which would be cheaper and would look
@@ -322,6 +326,20 @@ mod tests {
             "inside is not enough: a full down threshold of history has to sit behind the newest \
              queryable point, or a host about to be called Down has already dropped out of the \
              roster"
+        );
+
+        let overview = plan.queries.first().expect("a plan has a fleet-wide tier");
+        assert_eq!(overview.range.duration(), config.tuning.overview_window());
+        assert!(
+            overview.range.contains(newest_queryable),
+            "and inside the fleet-wide window too, or every alert on a healthy host reads NoData \
+             for want of a sample the backend was holding the whole time"
+        );
+        assert!(
+            overview.range.duration() > config.tuning.evidence_horizon(),
+            "the window has to hold every sample the evidence gate would admit. Narrower, and the \
+             window rather than the gate decides which alerts have evidence — and it decides \
+             differently for the focused host, whose detail window is an hour wide"
         );
 
         let detail = plan

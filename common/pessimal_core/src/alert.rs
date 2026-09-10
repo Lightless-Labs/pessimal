@@ -262,7 +262,7 @@ impl AlertEvaluation {
     /// Folds one poll's worth of data into the state and returns the new state.
     ///
     /// `series` is the data fetched for this rule's metric and host and `now` is the evaluation
-    /// instant. `max_staleness` is how old the newest sample may be before it stops counting as
+    /// instant. `max_age` is how old the newest sample may be before it stops counting as
     /// evidence: past that, the rule reports [`AlertState::NoData`] rather than judging the host
     /// on a reading that has stopped being refreshed.
     ///
@@ -271,13 +271,27 @@ impl AlertEvaluation {
     /// response — and the rule would dutifully fire, and keep firing, on a host nobody has heard
     /// from since. A silent host is [`crate::Liveness`]'s business to report, not an alert's.
     ///
+    /// The bound is supplied rather than derived because only the caller knows its read path.
+    /// `max_age` is measured from `now`, and `now` for most backends is not an instant a query can
+    /// observe: a columnar metrics backend batches on write, so its newest *queryable* sample is
+    /// already some constant behind wall clock however healthy the agent is. A caller that passes
+    /// only the age it would tolerate from a *local* collector refuses every sample a remote one
+    /// can give it. `pessimal_client_core` passes `PollTuning::evidence_horizon`, which is its
+    /// staleness bound plus its backend lag allowance.
+    ///
+    /// `now` itself is three things at once — the ceiling on admissible samples
+    /// ([`MetricSeries::latest_at`] discards anything newer), the instant `max_age` counts back
+    /// from, and the instant dwell is measured to — so it must stay the real evaluation instant. A
+    /// caller tempted to hand it a backdated instant to buy staleness headroom would throw away
+    /// the freshest sample it has and delay every fire by however far it backdated.
+    ///
     /// A disabled rule resets to [`AlertState::Ok`] so it cannot linger as firing.
     pub fn observe(
         &mut self,
         rule: &AlertRule,
         series: &MetricSeries,
         now: DateTime<Utc>,
-        max_staleness: Duration,
+        max_age: Duration,
     ) -> AlertState {
         if !rule.enabled || !rule.selector.matches(&self.host) {
             self.state = AlertState::Ok;
@@ -289,7 +303,7 @@ impl AlertEvaluation {
             return self.state;
         };
 
-        if now - point.at > max_staleness {
+        if now - point.at > max_age {
             self.state = AlertState::NoData;
             return self.state;
         }

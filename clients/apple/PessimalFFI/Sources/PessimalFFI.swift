@@ -3006,7 +3006,14 @@ public struct PollTuningRecord: Equatable, Hashable {
     public let metricStepSeconds: Int64
     public let chartWindowSeconds: Int64
     /**
-     * How old a sample may be and still be evidence for an alert.
+     * How old a sample may be and still be evidence for an alert — before
+     * `backend_lag_allowance_seconds` is added to it.
+     *
+     * The two are summed into the bound alerts are actually gated at (core's
+     * `PollTuning::evidence_horizon`), because a sample's measured age includes the backend's
+     * ingestion delay whether or not the agent is healthy. This half of the sum is the part that
+     * is about *us*: bucket quantisation and poll latency. Raise the lag allowance for a slow
+     * backend, not this.
      */
     public let maxStalenessSeconds: Int64
     /**
@@ -3029,7 +3036,14 @@ public struct PollTuningRecord: Equatable, Hashable {
          * `num_seconds().max(1)`, so a finer step would stop describing the query it produces.
          */metricStepSeconds: Int64, chartWindowSeconds: Int64, 
         /**
-         * How old a sample may be and still be evidence for an alert.
+         * How old a sample may be and still be evidence for an alert — before
+         * `backend_lag_allowance_seconds` is added to it.
+         *
+         * The two are summed into the bound alerts are actually gated at (core's
+         * `PollTuning::evidence_horizon`), because a sample's measured age includes the backend's
+         * ingestion delay whether or not the agent is healthy. This half of the sum is the part that
+         * is about *us*: bucket quantisation and poll latency. Raise the lag allowance for a slow
+         * backend, not this.
          */maxStalenessSeconds: Int64, 
         /**
          * How far behind wall clock the backend's newest queryable point lags, in seconds.
@@ -5273,8 +5287,8 @@ public func FfiConverterTypeSeverityRecord_lower(_ value: SeverityRecord) -> Rus
 public enum TuningWarningRecord: Equatable, Hashable {
     
     /**
-     * The rule's dwell is shorter than `max_staleness`, so one old-but-still-valid sample carries
-     * it straight to firing.
+     * The rule's dwell is shorter than the bound alerts are gated at — `max_staleness` plus the
+     * backend lag allowance — so one old-but-still-valid sample carries it straight to firing.
      */
     case spikeCanFire(ruleId: String, ruleName: String
     )

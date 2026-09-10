@@ -438,7 +438,14 @@ pub struct PollTuningRecord {
     /// `num_seconds().max(1)`, so a finer step would stop describing the query it produces.
     pub metric_step_seconds: i64,
     pub chart_window_seconds: i64,
-    /// How old a sample may be and still be evidence for an alert.
+    /// How old a sample may be and still be evidence for an alert — before
+    /// `backend_lag_allowance_seconds` is added to it.
+    ///
+    /// The two are summed into the bound alerts are actually gated at (core's
+    /// `PollTuning::evidence_horizon`), because a sample's measured age includes the backend's
+    /// ingestion delay whether or not the agent is healthy. This half of the sum is the part that
+    /// is about *us*: bucket quantisation and poll latency. Raise the lag allowance for a slow
+    /// backend, not this.
     pub max_staleness_seconds: i64,
     /// How far behind wall clock the backend's newest queryable point lags, in seconds.
     ///
@@ -596,8 +603,8 @@ impl TryFrom<FleetConfigRecord> for FleetConfig {
 /// `TuningWarning::message`; mirroring the variants without mirroring the prose is the point.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum TuningWarningRecord {
-    /// The rule's dwell is shorter than `max_staleness`, so one old-but-still-valid sample carries
-    /// it straight to firing.
+    /// The rule's dwell is shorter than the bound alerts are gated at — `max_staleness` plus the
+    /// backend lag allowance — so one old-but-still-valid sample carries it straight to firing.
     SpikeCanFire { rule_id: String, rule_name: String },
     /// A rule on a counter: the threshold is compared against the normalised rate or per-bucket
     /// delta, not the cumulative total the backend returns.
@@ -866,8 +873,9 @@ mod tests {
         poll_tuning_validated, tuning_warning_message, validate_alert_rule,
     };
 
-    /// A rule whose dwell comfortably exceeds the default `max_staleness` (150s), so it contributes
-    /// no `SpikeCanFire` noise to a test that is measuring something else.
+    /// A rule whose dwell comfortably exceeds the default evidence horizon (330s: a 150s staleness
+    /// bound plus the three-minute lag allowance), so it contributes no `SpikeCanFire` noise to a
+    /// test that is measuring something else.
     fn quiet_rule(name: &str, metric: MetricKind) -> AlertRule {
         draft_rule(
             "prod",
@@ -875,7 +883,7 @@ mod tests {
             metric,
             Comparator::GreaterThan,
             0.9,
-            Duration::seconds(300),
+            Duration::seconds(600),
             HostSelector::All,
         )
         .expect("a valid rule")
@@ -1294,7 +1302,7 @@ mod tests {
     #[test]
     fn the_audit_is_the_client_cores_in_cores_order() {
         let config = config().with_rules(vec![
-            // Dwell under the default 150s max staleness: one old sample fires it.
+            // Dwell under the default 330s evidence horizon: one old sample fires it.
             draft_rule(
                 "prod",
                 "spiky",

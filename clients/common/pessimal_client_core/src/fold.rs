@@ -242,7 +242,10 @@ impl FleetState {
     ///    `rule_fingerprint` replaces the evaluation rather than reusing it.
     /// 5. **Series.** Per retained host and planned metric, switch on `PollObservation::coverage`.
     /// 6. **Alerts.** Per reconciled pair, `observe` on the SAME evaluation value as last poll so
-    ///    dwell accumulates — or, on `Unavailable`, no `observe` at all.
+    ///    dwell accumulates — or, on `Unavailable`, no `observe` at all. Evidence is gated at
+    ///    `evidence_horizon()`, i.e. `max_staleness` measured from the same
+    ///    `now - backend_lag_allowance()` step 2 judges liveness as of, so a host cannot read Alive
+    ///    while every alert on it reads `NoData`.
     /// 7. **Bookkeeping.** Freshness inputs, the advice, and the advised instant the next fold's
     ///    step 1 will measure against.
     #[must_use]
@@ -540,6 +543,11 @@ impl FleetState {
     /// backoff, or a `Stop`, must not trip its own freeze, while an unattended gap must. Skipped
     /// entirely on the first fold, when there is no advised instant — which is also what makes
     /// persisting a `FleetState` across a relaunch safe.
+    ///
+    /// The raw `max_staleness`, deliberately, and not the evidence horizon step 6 gates on: this
+    /// measures *our own* lateness against an instant we chose ourselves, and there is no backend
+    /// in that comparison to be behind. Budgeting a remote ingestion lag into a local
+    /// suspended-app timer would only make a blind gap take three minutes longer to notice.
     fn reset_after_blind_gap(&mut self, now: DateTime<Utc>, max_staleness: Duration) {
         let Some(advised) = self.advised_next_poll else {
             return;
@@ -680,7 +688,8 @@ impl FleetState {
 
     /// Replace, never merge. Replacing outright kills timestamp alignment bugs, duplicate points
     /// and drifting windows at the cost of bandwidth — affordable only because the fleet-wide
-    /// window is about seven buckets.
+    /// window is about thirteen buckets, most of which are the backend's lag allowance rather than
+    /// history anybody charts.
     fn store_series(&mut self, config: &FleetConfig, observation: &PollObservation) {
         let now = observation.observed_at;
         let targets: Vec<(HostId, OsFamily)> = self
@@ -761,9 +770,21 @@ impl FleetState {
     // ---- step 6: alerts -----------------------------------------------------------------------
 
     /// `observe` runs on the SAME evaluation value as last poll, which is how dwell accumulates.
+    ///
+    /// The bound handed to it is [`crate::config::PollTuning::evidence_horizon`], not
+    /// `max_staleness`: the gate rejects samples nobody is refreshing, and that has to be measured
+    /// from `now - backend_lag_allowance()` — the same shifted instant step 2 judges liveness as of
+    /// — because `now` is not an instant a poll can observe. At `max_staleness` alone this was the
+    /// tighter of the two bounds, and a host whose backend ran 160s behind read `Alive` with every
+    /// one of its alerts at `NoData`.
+    ///
+    /// The *instant* stays `now`, and that asymmetry with step 2 is deliberate. `observe`'s `now`
+    /// does three jobs — it bounds the gate, it picks the sample (`latest_at` discards everything
+    /// newer), and it anchors dwell — and only the first wants the shift. Handing it the shifted
+    /// instant would discard the freshest sample, which is the one this fix exists to admit.
     fn observe_alerts(&mut self, config: &FleetConfig, observation: &PollObservation) {
         let now = observation.observed_at;
-        let max_staleness = config.tuning.max_staleness();
+        let horizon = config.tuning.evidence_horizon();
         let by_key = rules_by_key(config);
 
         for (host, per_rule) in &mut self.evaluations {
@@ -788,15 +809,15 @@ impl FleetState {
                 let candidate = normalize::reduce(rule.metric, host, &normalized, reduction)
                     .unwrap_or_else(|| MetricSeries::new(host.clone(), rule.metric, Vec::new()));
 
-                stored
-                    .evaluation
-                    .observe(rule, &candidate, now, max_staleness);
+                stored.evaluation.observe(rule, &candidate, now, horizon);
 
                 // Exactly `observe`'s own gate, so `latest_value` is the value the phase was
-                // judged on and is `None` whenever the phase is `NoData`.
+                // judged on and is `None` whenever the phase is `NoData`. The two must widen
+                // together: a horizon here and `max_staleness` there renders `Firing` with no
+                // value behind it.
                 let judged = candidate
                     .latest_at(now)
-                    .filter(|point| now - point.at <= max_staleness);
+                    .filter(|point| now - point.at <= horizon);
                 stored.latest_value = judged.map(|point| point.value);
                 // `dominant_at` matches on the exact instant of the reduced point, so the label can
                 // never name a series that did not produce the value. `reduce` returns empty
@@ -1203,6 +1224,11 @@ mod tests {
     /// ingestion lag plus a 30-second bucket stamped at its start. Already past the 90-second
     /// stale threshold, and two thirds of the way to Down.
     const MEASURED_HEARTBEAT_AGE_SECONDS: i64 = 118;
+
+    /// The backend in the defect report: running 160 seconds behind. Past `max_staleness` (150s)
+    /// and inside the three-minute lag allowance, which is precisely the band where the evidence
+    /// gate and the liveness verdict used to disagree.
+    const BACKEND_BEHIND_SECONDS: i64 = 160;
 
     fn cpu(name: &str, samples: &[(DateTime<Utc>, f64)]) -> MetricSeries {
         series(name, MetricKind::CpuUtilization, samples)
@@ -1796,6 +1822,142 @@ mod tests {
             Liveness::Down,
             "the allowance delays a Down verdict by exactly itself and never suppresses one"
         );
+    }
+
+    /// The second bug the lag produced, and the worse one: liveness learned to budget for the lag
+    /// and the evidence gate did not, so the gate became the tighter bound. A host reads Alive
+    /// while every alert on it reads `NoData` — a fleet that looks healthy and has silently stopped
+    /// alerting, which is strictly worse than one that looks stale.
+    #[test]
+    fn a_breaching_host_behind_the_backends_lag_fires_rather_than_reading_no_data() {
+        let rule = cpu_rule(0);
+        let config = config().with_rules(vec![rule.clone()]);
+        let beat = at(0);
+        let now = beat + Duration::seconds(BACKEND_BEHIND_SECONDS);
+
+        let update = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(
+                &config,
+                now,
+                vec![host("web-1", beat)],
+                &[cpu("web-1", &[(beat, 0.95)])],
+            ),
+        );
+
+        let web1 = HostId::new("web-1");
+        assert_eq!(
+            update.view.host(&web1).expect("listed").liveness,
+            Liveness::Alive,
+            "the premise: liveness budgets for the lag, so this host is not silent"
+        );
+        assert_eq!(
+            update.state.evaluation(rule.id(), &web1),
+            Some(AlertState::Firing { since: beat }),
+            "a host that liveness calls Alive must have alertable evidence: the sample is the \
+             freshest one the backend could answer with, not one nobody is refreshing"
+        );
+
+        let shown = &update.view.alerts[0];
+        assert_eq!(shown.phase, AlertPhase::Firing);
+        assert!(
+            (shown.latest_value.expect("a judged value") - 0.95).abs() < f64::EPSILON,
+            "the view's copy of the gate must admit exactly what `observe` admitted, or the alert \
+             renders as Firing with no value behind it"
+        );
+    }
+
+    /// The bound the gate exists for, which widening it must not lose: a sample nobody is
+    /// refreshing is still refused, and it is refused at the instant liveness gives up on the host
+    /// rather than minutes before it. At defaults `max_staleness == down_threshold`, so the two
+    /// shift together and land on the same second.
+    #[test]
+    fn a_sample_nobody_refreshes_is_still_refused_at_the_instant_liveness_gives_up() {
+        let rule = cpu_rule(0);
+        let config = config().with_rules(vec![rule.clone()]);
+        let horizon = config.tuning.evidence_horizon();
+        let beat = at(0);
+        let web1 = HostId::new("web-1");
+        let breach = [cpu("web-1", &[(beat, 0.95)])];
+
+        let judged = FleetState::new(BACKEND).apply(
+            &config,
+            &clean_poll(&config, beat + horizon, vec![host("web-1", beat)], &breach),
+        );
+        assert_eq!(
+            judged.state.evaluation(rule.id(), &web1),
+            Some(AlertState::Firing { since: beat }),
+            "the horizon itself is admissible; the gate rejects what is past it"
+        );
+        assert_eq!(
+            judged.view.host(&web1).expect("listed").liveness,
+            Liveness::Stale,
+            "still a positive judgement about a host we have heard from"
+        );
+
+        let refused = judged.state.apply(
+            &config,
+            &clean_poll(
+                &config,
+                beat + horizon + Duration::seconds(1),
+                vec![host("web-1", beat)],
+                &breach,
+            ),
+        );
+        assert_eq!(
+            refused.state.evaluation(rule.id(), &web1),
+            Some(AlertState::NoData),
+            "an alert must not keep firing on a host nobody has heard from, however wide the \
+             allowance"
+        );
+        assert_eq!(
+            refused.view.alerts[0].latest_value, None,
+            "`NoData` carries no value: the gate and the view's copy of it agree"
+        );
+        assert_eq!(
+            refused.view.host(&web1).expect("listed").liveness,
+            Liveness::Down,
+            "evidence runs out on the same second liveness calls the host down, which is the \
+             interlock `max_staleness <= down_threshold` made visible"
+        );
+    }
+
+    /// The invariant the defect broke, stated once rather than pinned at one age: a host the fold
+    /// has not given up on has alertable evidence. Either bound narrowing on its own puts the fleet
+    /// back in the state where it reads healthy and has silently stopped alerting.
+    #[test]
+    fn a_host_liveness_has_not_given_up_on_always_has_alertable_evidence() {
+        let rule = cpu_rule(0);
+        let config = config().with_rules(vec![rule.clone()]);
+        let web1 = HostId::new("web-1");
+        let beat = at(0);
+
+        // Both bounds, either side of each of their boundaries: the measured age, the defect's
+        // backend, the allowance itself, the stale and down flips, and past the horizon.
+        for age in [0, 118, 160, 180, 270, 271, 330, 331, 600] {
+            let update = FleetState::new(BACKEND).apply(
+                &config,
+                &clean_poll(
+                    &config,
+                    beat + Duration::seconds(age),
+                    vec![host("web-1", beat)],
+                    &[cpu("web-1", &[(beat, 0.95)])],
+                ),
+            );
+            let liveness = update.view.host(&web1).expect("listed").liveness;
+            let state = update
+                .state
+                .evaluation(rule.id(), &web1)
+                .expect("a matching enabled rule is always evaluated");
+
+            assert_eq!(
+                liveness == Liveness::Down,
+                state == AlertState::NoData,
+                "at {age}s the fold said liveness {liveness:?} and evidence {state:?}; a host \
+                 that is not Down must be judged, and one that is must not keep firing. At the \
+                 preset `max_staleness == down_threshold`, so the two expire on the same second"
+            );
+        }
     }
 
     #[test]

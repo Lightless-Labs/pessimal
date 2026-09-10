@@ -580,8 +580,8 @@ mod tests {
         FleetConfig::new("prod", PollTuning::default()).expect("`prod` is a usable environment")
     }
 
-    /// A rule whose dwell is shorter than the default `max_staleness` (150 s), which is exactly what
-    /// `FleetConfig::audit` reports as `SpikeCanFire`.
+    /// A rule whose dwell is shorter than the default evidence horizon (330 s), which is exactly
+    /// what `FleetConfig::audit` reports as `SpikeCanFire`.
     fn spiky_rule() -> AlertRule {
         draft_rule(
             "prod",
@@ -811,7 +811,7 @@ mod tests {
                 warnings.as_slice(),
                 [TuningWarningRecord::SpikeCanFire { rule_name, .. }] if rule_name == "cpu hot"
             ),
-            "a dwell shorter than `max_staleness` is core's `SpikeCanFire`, got {warnings:?}"
+            "a dwell shorter than the evidence horizon is core's `SpikeCanFire`, got {warnings:?}"
         );
         assert_eq!(
             session.view().warnings,
