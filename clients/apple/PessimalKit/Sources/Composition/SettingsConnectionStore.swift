@@ -1,4 +1,14 @@
+//
+//  SettingsConnectionStore.swift
+//  Pessimal — shared by the macOS and iOS clients
+//
+
 import Foundation
+#if canImport(PessimalFFI)
+    // Built as its own module for iOS, compiled into the app's module on macOS. See the note in
+    // `FleetModel.swift`.
+    import PessimalFFI
+#endif
 
 /// What the settings window needs beyond what ``FleetSettingsStore`` already offers.
 ///

@@ -1,8 +1,8 @@
 //
 //  FleetStoreBridge.swift
-//  Pessimal — macOS menu bar client
+//  Pessimal — shared by the macOS and iOS clients
 //
-//  The composition root's adapter: the Platform layer's three stores on one side, the Model
+//  Both apps' composition root adapter: the Platform layer's three stores on one side, the Model
 //  layer's two protocols on the other. It exists because neither layer is allowed to know the
 //  other — `FleetModel` declares what it needs (`FleetSettingsStore`, `FleetStateCache`) and the
 //  platform declares what it has (`APIKeyStore`, `SettingsStore`, `FleetStateStore`), and the app
@@ -14,6 +14,11 @@
 
 import Foundation
 import Observation
+#if canImport(PessimalFFI)
+    // Built as its own module for iOS, compiled into the app's module on macOS. See the note in
+    // `FleetModel.swift`.
+    import PessimalFFI
+#endif
 
 /// Assembles a `FleetConnection` and a `FleetConfigRecord` from the platform's stores, and caches
 /// the exported fleet state through them.
@@ -22,12 +27,18 @@ import Observation
 /// read once and held: two objects would mean two reads, two prompts, and two answers that can
 /// disagree about whether the Keychain opened.
 ///
+/// Lives here rather than in either app because nothing in it is platform-specific — it reads
+/// `UserDefaults`, the Keychain and a file, and neither app wants a different answer from any of
+/// the three. A second copy on the iOS side would be two adapters that must agree about the one
+/// rule in this file that is genuinely dangerous to get wrong: never overwrite an API key that
+/// could not be read.
+///
 /// Not `@MainActor`, because ``FleetSettingsStore``, ``FleetStateCache`` and
 /// ``SettingsConnectionStore`` are not: an isolated witness cannot satisfy a non-isolated
 /// requirement. In practice every call arrives on the main actor — `FleetModel` says so in its own
 /// documentation, and the views that read the three `*Problem` properties are main-actor views.
 @Observable
-final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
+public final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     @ObservationIgnored private let stores: PlatformStores
 
     // MARK: - Problems worth showing
@@ -38,21 +49,21 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// finished logging in or a user who dismissed a prompt, and reporting either as *unconfigured*
     /// would invite someone to retype a key that is already there — which, per the platform
     /// layer's contract, is the one thing that must never follow a failed read.
-    private(set) var credentialProblem: String?
+    public private(set) var credentialProblem: String?
 
     /// Core's sentence for stored settings it refuses — an environment name with `::` in it, a
     /// poll interval that fails one of `pollTuningValidated`'s interlocks.
     ///
     /// Without this the app would show its first-launch screen to someone whose settings exist and
     /// are wrong, and the two look identical while meaning opposite things.
-    private(set) var settingsProblem: String?
+    public private(set) var settingsProblem: String?
 
     /// Why the cached fleet state could not be read or written.
     ///
     /// A footnote, never a banner: a cache that will not load costs a cold start, and one that will
     /// not save costs the next cold start. Neither is a reason to stop polling — but an app that
     /// has silently had no history for a month is worse than one that says so.
-    private(set) var stateCacheProblem: String?
+    public private(set) var stateCacheProblem: String?
 
     // MARK: - Held rather than re-read
 
@@ -80,7 +91,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// relaunch they do not — see ``saveConfig(_:)``.
     @ObservationIgnored private var acceptedConfig: FleetConfigRecord?
 
-    init(stores: PlatformStores) {
+    public init(stores: PlatformStores) {
         self.stores = stores
     }
 
@@ -92,7 +103,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// difference is carried on ``credentialProblem`` rather than folded in here: this protocol has
     /// no error channel, and inventing one by returning a blank key would send core a credential
     /// the user never typed.
-    var connection: FleetConnection? {
+    public var connection: FleetConnection? {
         loadAPIKeyIfNeeded()
         guard let baseURL = stores.settings.backendBaseURL, let apiKey else { return nil }
         return FleetConnection(baseURL: baseURL, apiKey: apiKey)
@@ -103,7 +114,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// `nil` when no environment has ever been saved — first launch, which the menu renders as an
     /// invitation rather than as an empty fleet. `nil` *also* when core refuses what is stored, and
     /// ``settingsProblem`` is what tells those two apart.
-    var config: FleetConfigRecord? {
+    public var config: FleetConfigRecord? {
         guard let environment = stores.settings.environment else {
             setSettingsProblem(nil)
             return nil
@@ -144,7 +155,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// place for them. They survive the run in ``acceptedConfig`` and fall back to core's defaults
     /// on the next launch. That is a real limitation of the four-value store rather than a
     /// decision made here, and it is written down so that nobody discovers it as a bug.
-    func saveConfig(_ config: FleetConfigRecord) throws {
+    public func saveConfig(_ config: FleetConfigRecord) throws {
         stores.settings.environment = config.environment
         stores.settings.pollIntervalSeconds = config.tuning.pollIntervalSeconds
         stores.settings.alertRulesJSON = config.rulesJson
@@ -153,7 +164,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
 
     // MARK: - FleetStateCache
 
-    func loadState() -> String? {
+    public func loadState() -> String? {
         switch stores.fleetState.load() {
         case .absent:
             setStateCacheProblem(nil)
@@ -169,12 +180,12 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
         }
     }
 
-    func saveState(_ json: String) throws {
+    public func saveState(_ json: String) throws {
         try stores.fleetState.save(json)
         setStateCacheProblem(nil)
     }
 
-    func clearState() throws {
+    public func clearState() throws {
         try stores.fleetState.clear()
         setStateCacheProblem(nil)
     }
@@ -187,7 +198,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// button — which is what makes re-prompting the right thing to do rather than a nuisance: a
     /// person pressing it is a person saying they will answer the panel this time. A read that
     /// already succeeded, or that found nothing to read, is settled and costs nothing here.
-    func retryUnresolvedCredentials() {
+    public func retryUnresolvedCredentials() {
         guard credentialProblem != nil else { return }
         apiKeyResolved = false
         loadAPIKeyIfNeeded()
@@ -205,7 +216,7 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
     /// while ``SettingsView`` checks the same thing before calling, an enablement check evaluated
     /// one render ago is not a guarantee. The read is retried first, so a Keychain that has since
     /// unlocked settles the question instead of blocking a legitimate save.
-    func save(connection: FleetConnection) throws {
+    public func save(connection: FleetConnection) throws {
         retryUnresolvedCredentials()
         if let credentialProblem {
             throw FleetStoreBridgeError.credentialUnreadable(credentialProblem)
@@ -320,11 +331,11 @@ final class FleetStoreBridge: SettingsConnectionStore, FleetStateCache {
 
 /// The one failure this adapter raises on its own behalf. Everything else is core's or the
 /// platform's, passed through untouched.
-enum FleetStoreBridgeError: Error, Equatable, LocalizedError {
+public enum FleetStoreBridgeError: Error, Equatable, LocalizedError {
     /// Asked to save a key over one that could not be read.
     case credentialUnreadable(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case let .credentialUnreadable(reason):
             return "The saved API key could not be read, so it must not be overwritten: \(reason)"

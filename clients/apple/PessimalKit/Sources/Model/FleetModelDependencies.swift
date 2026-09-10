@@ -9,6 +9,11 @@
 //
 
 import Foundation
+#if canImport(PessimalFFI)
+    // Built as its own module for iOS, compiled into the app's module on macOS. See the note in
+    // `FleetModel.swift`.
+    import PessimalFFI
+#endif
 
 // MARK: - Connection
 

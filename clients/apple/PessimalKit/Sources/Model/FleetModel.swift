@@ -19,6 +19,15 @@
 #endif
 import Foundation
 import Observation
+#if canImport(PessimalFFI)
+    // Core's records arrive as their own Swift module when this directory is built as one —
+    // the `//clients/apple/PessimalKit` Bazel target, which is how the iOS app consumes it.
+    // The macOS app instead compiles these files *and* the generated bindings into a single
+    // module (see `scripts/build-macos-app.sh`), where no module named `PessimalFFI` exists
+    // and a plain import would not resolve. Hence the guard: the same sources have to build
+    // both ways, and which way is in force is not something they can be told.
+    import PessimalFFI
+#endif
 
 @MainActor
 @Observable
