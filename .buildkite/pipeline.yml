@@ -13,6 +13,16 @@
 steps:
   - label: ":linux: Rust workspace"
     key: rust-linux
+    retry:
+      automatic:
+        # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
+        # Exit 1 covers the Bazel fetch failure; the rest are the guest dying under us.
+        - exit_status: 1
+          limit: 2
+        - exit_status: -1  # agent lost, VM never came up
+          limit: 2
+        - exit_status: 255
+          limit: 2
     if: build.tag == null
     # Linux guests are cheap and do not count against the macOS guest limit, so the Rust workspace
     # runs here and leaves the single macOS slot for Bazel and the Apple bundles.
@@ -49,6 +59,16 @@ steps:
 
   - label: ":bazel: iOS app"
     key: ios-simulator
+    retry:
+      automatic:
+        # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
+        # Exit 1 covers the Bazel fetch failure; the rest are the guest dying under us.
+        - exit_status: 1
+          limit: 2
+        - exit_status: -1  # agent lost, VM never came up
+          limit: 2
+        - exit_status: 255
+          limit: 2
     if: build.tag == null
     # Exactly ONE macOS guest at a time, shared with every other macOS job. Two concurrent macOS VMs
     # starve each other on this host; Descartes' pipeline records the build numbers where that was
@@ -95,6 +115,16 @@ steps:
 
   - label: ":apple: macOS menu bar app"
     key: macos-bundle
+    retry:
+      automatic:
+        # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
+        # Exit 1 covers the Bazel fetch failure; the rest are the guest dying under us.
+        - exit_status: 1
+          limit: 2
+        - exit_status: -1  # agent lost, VM never came up
+          limit: 2
+        - exit_status: 255
+          limit: 2
     if: build.tag == null
     depends_on: ios-simulator
     concurrency: 1

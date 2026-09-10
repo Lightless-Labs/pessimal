@@ -77,5 +77,8 @@ build:ci --config=ci-base
 # ~/Library/MobileDevice. `ci=true` is what tells the app target to ask for neither.
 build:ci --define ci=true
 build:ci --config=ios_sim
+# Undoes the development machine's memory cap. That 0.4 exists because this repo shares an 11 GB VM
+# with cargo; a CI guest has the machine to itself and only pays for the restriction in wall clock.
+build:ci --local_resources=memory=HOST_RAM*.8
 
 test --test_output=errors
