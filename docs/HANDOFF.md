@@ -48,6 +48,18 @@
   stores, and the composition root. Its imports of the bindings are guarded with `canImport`, which
   is load-bearing — Bazel compiles `PessimalFFI` as a real module while the macOS script compiles
   everything into one module where it does not exist.
+- **Buildkite builds the Apple clients on the mini.** Pipeline `la-bande-a-bonnot/pessimal`, green
+  end to end for the non-release jobs: the Rust workspace on a Linux guest, the iOS app through Bazel
+  with the uniffi symbols asserted, and the macOS bundle with the Swift smoke test. GitHub Actions
+  keeps the cross-platform matrix, which hosted runners do free on a public repo.
+- **The iOS release path reaches codesign and stops there.** The distribution profile and the
+  certificate in the vault are a mismatched pair — two Apple Distribution certificates exist for the
+  same team. See
+  [`todos/ios-testflight-upload-is-unverified.md`](../todos/ios-testflight-upload-is-unverified.md);
+  it needs a decision about which certificate is canonical, not a code change.
+- **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party
+  packages: ES256 JWTs are signed by shelling out to `openssl`. It replaced sigh's profile fetch and
+  worked on first contact where sigh reported only "no matching profile found".
 - **The iOS release path is wired but never run.** `clients/apple/ios/BUILD.bazel` carries the
   profile `select()` and `apple_bundle_version`; `fastlane/` carries the lanes, mirroring Pocket
   Companion's secret names and division of labour. Everything a local machine can check is checked —

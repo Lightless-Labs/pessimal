@@ -58,10 +58,44 @@ this needs nothing installed in the login keychain and leaves nothing behind. It
 WWDR intermediate certificate, which macOS usually already has; if codesign reports an untrusted
 identity, that is the missing piece and `security import AppleWWDRCA.cer` is the fix.
 
+## Blocked: the profile and the certificate are not the same pair
+
+Build #21, from `scripts/signing-diagnostics.py`:
+
+```
+profile: 'com.lightless-labs.pessimal.ios'
+  team   : PKPPLFK854
+  app id : PKPPLFK854.com.lightless-labs.pessimal.ios
+  accepts 1 certificate(s):
+    764C077A58A9FB589B8F2847FBF53C7B5637661A  'Apple Distribution: Thomas Leger (PKPPLFK854)'
+identities visible: 1
+    24583EF1D58CEAEE35ABF2023C529D8184D25BA7  'Apple Distribution: Thomas Léger (PKPPLFK854)'
+NO MATCH.
+```
+
+Two different Apple Distribution certificates in the same team — one spelled `Leger`, one `Léger`. The
+profile was generated against the first; `APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64` in
+`prd_ios_deployment` holds the second. `2458…` is the fingerprint that appears in the band's
+[imported-framework/keychain runbook](https://github.com/Bande-a-Bonnot/monorepo), so the vault holds
+the certificate Pocket Companion already ships with.
+
+**This is a decision, not a bug: which certificate is canonical for the band?**
+
+1. *Recommended* — reissue the `com.lightless-labs.pessimal.ios` profile selecting the `Thomas Léger`
+   certificate (`2458…`). One distribution certificate for every app, which is what the shared Doppler
+   config and Pocket Companion already assume, and nothing in any vault changes.
+2. Put the `Thomas Leger` (`764C…`) certificate's `.p12` and password into `prd_ios_deployment`. This
+   gives Pessimal its own signing identity and a second certificate to keep track of.
+
+Deliberately not done from here: `scripts/asc.py` only reads. Recreating a provisioning profile
+unattended is how a team ends up with several and no idea which one ships — the same reason sigh's
+ability to do it was removed.
+
 ## Unverified beyond that
 
-- **The upload itself.** Everything up to it now runs on the guest; whether App Store Connect accepts
-  the build is the one thing no local check can answer.
+- **Everything from codesign onward.** The build itself is proven: 939 actions, the whole Rust
+  workspace and every Swift module compiled for `arm64` in `opt`, twice. Signing, packaging and the
+  upload have never run, because the certificate mismatch above stops the lane before them.
 - **Every push to `main` spawns macOS jobs that queue against a release** for the single macOS slot,
   including docs-only commits. A dynamic upload script that skips the Apple jobs when no Swift, Rust
   or Bazel file changed would pay for itself; Pocket Companion's `upload-pipeline.sh` is the shape.
