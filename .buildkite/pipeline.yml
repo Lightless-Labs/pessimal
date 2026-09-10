@@ -50,9 +50,16 @@ steps:
       rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
       cd "$$work_dir"
 
+      # The guest images' default toolchain drifts behind this workspace's MSRV: the macOS image ships
+      # rustc 1.88 and sysinfo requires 1.95. Bazel never notices, because MODULE.bazel pins its own
+      # 1.95.0 toolchain, so only the cargo-driven steps see it -- which is why the iOS job passed
+      # while the macOS bundle failed with a list of crates demanding 1.95.
+      #
+      # `stable` rather than a pinned version, to match what .github/workflows/ci.yml installs. The
+      # workspace tracks stable deliberately; pinning here would quietly stop testing what GitHub does.
+      rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      rustup default stable
       cargo --version
-      # MSRV is 1.95, set by sysinfo. An older toolchain in the image fails here rather than in a
-      # confusing place later.
       cargo fmt --all --check
       cargo clippy --workspace --all-targets -- -D warnings
       cargo test --workspace --locked
@@ -149,6 +156,17 @@ steps:
       rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
       cd "$$work_dir"
 
+      # The guest images' default toolchain drifts behind this workspace's MSRV: the macOS image ships
+      # rustc 1.88 and sysinfo requires 1.95. Bazel never notices, because MODULE.bazel pins its own
+      # 1.95.0 toolchain, so only the cargo-driven steps see it -- which is why the iOS job passed
+      # while the macOS bundle failed with a list of crates demanding 1.95.
+      #
+      # `stable` rather than a pinned version, to match what .github/workflows/ci.yml installs. The
+      # workspace tracks stable deliberately; pinning here would quietly stop testing what GitHub does.
+      rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      rustup default stable
+      cargo --version
+
       scripts/build-macos-app.sh
       scripts/swift-smoke.sh
 
@@ -206,16 +224,25 @@ steps:
         exit 1
       fi
 
-      # macOS ships Ruby 2.6, where bundler cannot find fastlane at all. Fail on the version rather
-      # than on a confusing missing-gem error twenty lines later.
+      # macOS ships Ruby 2.6, where bundler cannot even find fastlane. Fail on the version rather than
+      # on a confusing missing-gem error twenty lines later.
+      #
+      # The floor is checked, not the exact pin. .ruby-version records what the development machine
+      # has; the guest image has whatever it was baked with, and refusing to ship over a patch
+      # difference would be theatre. A mismatch is worth saying out loud, though, because it is the
+      # first thing to suspect if the gems resolve differently here than they do locally.
       if command -v rbenv >/dev/null 2>&1; then
         eval "$$(rbenv init - bash)"
       fi
       ruby_version="$$(ruby -e 'print RUBY_VERSION')"
+      echo "ruby $$ruby_version"
+      case "$$ruby_version" in
+        3.*) ;;
+        *) echo "fastlane needs Ruby 3; this guest has $$ruby_version" >&2; exit 1 ;;
+      esac
       expected="$$(tr -d '[:space:]' < .ruby-version)"
       if [[ "$$ruby_version" != "$$expected" ]]; then
-        echo "ruby $$ruby_version, but .ruby-version asks for $$expected" >&2
-        exit 1
+        echo "note: .ruby-version asks for $$expected; the guest image has $$ruby_version"
       fi
 
       bundle install --quiet
