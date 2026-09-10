@@ -1,32 +1,38 @@
 # Target platforms for the Apple clients.
 #
-# Named rather than relying on --apple_platform_type so a build can say which it means, and so
-# .bazelrc configs stay readable.
+# Referenced by the .bazelrc configs:
+#   --platforms=//platforms:ios_arm64      (device)
+#   --platforms=//platforms:ios_sim_arm64  (simulator, Apple silicon)
+#
+# Note `@apple_support//constraints:simulator`, not `@build_bazel_apple_support//...`: under bzlmod
+# the repo is named after the module, and the legacy WORKSPACE name resolves to nothing. The error
+# it produces blames the platform for not providing PlatformInfo, which does not mention the real
+# cause.
 
 package(default_visibility = ["//visibility:public"])
 
 platform(
     name = "ios_arm64",
     constraint_values = [
-        "@platforms//cpu:arm64",
         "@platforms//os:ios",
-        "@build_bazel_apple_support//constraints:device",
+        "@platforms//cpu:arm64",
+        "@apple_support//constraints:device",
     ],
 )
 
 platform(
     name = "ios_sim_arm64",
     constraint_values = [
-        "@platforms//cpu:arm64",
         "@platforms//os:ios",
-        "@build_bazel_apple_support//constraints:simulator",
+        "@platforms//cpu:arm64",
+        "@apple_support//constraints:simulator",
     ],
 )
 
 platform(
     name = "macos_arm64",
     constraint_values = [
-        "@platforms//cpu:arm64",
         "@platforms//os:macos",
+        "@platforms//cpu:arm64",
     ],
 )
