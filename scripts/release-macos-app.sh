@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build, sign and notarize Pessimal.app from secrets held in Doppler.
 #
-#   DOPPLER_TOKEN=... DOPPLER_PROJECT=pessimal DOPPLER_CONFIG=prd \
+#   DOPPLER_TOKEN=... DOPPLER_PROJECT=lightless-labs-pessimal DOPPLER_CONFIG=prd_macos_notarisation \
 #     ./scripts/release-macos-app.sh
 #
 # This is the wrapper that makes the notarize script usable in CI. It exists because the two halves
@@ -23,8 +23,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 BUILD_ROOT="${PESSIMAL_RELEASE_BUILD_DIR:-$ROOT_DIR/.build/macos/release-signing}"
-DOPPLER_PROJECT="${DOPPLER_PROJECT:-pessimal}"
-DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd}"
+DOPPLER_PROJECT="${DOPPLER_PROJECT:-lightless-labs-pessimal}"
+DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd_macos_notarisation}"
 
 usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && { usage; exit 0; }

@@ -48,6 +48,16 @@
   stores, and the composition root. Its imports of the bindings are guarded with `canImport`, which
   is load-bearing — Bazel compiles `PessimalFFI` as a real module while the macOS script compiles
   everything into one module where it does not exist.
+- **The iOS release path is wired but never run.** `clients/apple/ios/BUILD.bazel` carries the
+  profile `select()` and `apple_bundle_version`; `fastlane/` carries the lanes, mirroring Pocket
+  Companion's secret names and division of labour. Everything a local machine can check is checked —
+  see [`todos/ios-testflight-upload-is-unverified.md`](../todos/ios-testflight-upload-is-unverified.md)
+  for what is left, which is the Apple portal and the first upload.
+- **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
+  Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`),
+  `prd_macos_notarisation` for `scripts/release-macos-app.sh`, and `prd_app-ios` for what the app
+  needs at runtime — which today is nothing, because the iOS app takes its backend URL and key from
+  the user rather than from a baked-in plist the way kumbaya does.
 
 ## Verifying the agent locally
 
@@ -66,6 +76,17 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 - None open.
 
 ## Gotchas found the hard way
+
+**`--platforms` does not decide device versus simulator.** rules_apple reads the legacy Apple CPU
+configuration, so `--config=ios_device` with only `--platforms=//platforms:ios_arm64` built an arm64
+bundle whose Info.plist said `DTPlatformName=iphonesimulator`. It signs nothing, installs nowhere, and
+— worst of all — *succeeds*, which is how a missing `provisioning_profile` attribute went unnoticed.
+`--ios_multi_cpus=arm64` is the flag that decides it.
+
+**`--embed_label` is inert without an `apple_bundle_version` target.** fastlane passed the label, the
+build succeeded, and `CFBundleVersion` stayed at whatever Info.plist said. The failure would have
+arrived from App Store Connect on the *second* upload, after signing and uploading both times.
+
 
 - **A collector on loopback verifies almost nothing.** Four real bugs survived every local run, the
   CI export job and the smoke script, and all four fell out of the first contact with a real
@@ -121,15 +142,17 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 
 M7, additional query backends (Honeycomb, ClickStack), or the open items below. Two things first:
 
-1. Read [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)
-   before writing `MODULE.bazel`. MSRV is 1.95 and the sibling projects pin a `rules_rust` that
-   predates it. None of them has a `macos_application` target either, so that part is new ground.
+1. ~~Read `todos/bazel-toolchain-must-provide-rust-1-95.md` before writing `MODULE.bazel`~~ — done.
+   `MODULE.bazel` pins `rules_rust` 0.74.0 and Rust 1.95.0, and the iOS app builds. A
+   `macos_application` target is still new ground; macOS ships through
+   `scripts/build-macos-app.sh` for now.
 2. ~~Confirm the SigNoz adapter against a live instance~~ — done 2026-09-09, and it found four bugs.
    See [`solutions/backend-ingestion-lag-breaks-liveness.md`](solutions/backend-ingestion-lag-breaks-liveness.md)
    and the fixes either side of it in the log.
-3. Pick up [`todos/alert-evidence-staleness-ignores-backend-lag.md`](../todos/alert-evidence-staleness-ignores-backend-lag.md)
-   before the apps start drawing alerts: liveness now budgets for backend lag and the alert evidence
-   gate does not, so a lagging host can read Alive while all its alerts read NoData.
+3. ~~Pick up `todos/alert-evidence-staleness-ignores-backend-lag.md`~~ — done, commit `0521efb`:
+   the evidence gate now uses `evidence_horizon()` rather than `max_staleness`.
+4. Run the first TestFlight upload by hand before writing a workflow for it. The lane loads and the
+   build resolves its profile; what has never happened is the portal fetch and the upload.
 
 One thing the client core cannot check and M4 must not forget: nothing detects an unwired
 `SignozConfig::for_policy`, and the symptom is a healthy fleet silently reading stale or down with
