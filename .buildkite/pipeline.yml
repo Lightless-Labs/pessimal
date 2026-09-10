@@ -274,9 +274,12 @@ steps:
       fi
 
       bundle install --quiet
-      bundle exec fastlane pessimal_beta_testflight \
-        version:"$$version" \
-        build_number:"$$BUILDKITE_BUILD_NUMBER"
+
+      # The Doppler service token the plugin injects opens the whole config, and there is no doppler
+      # CLI on the guest. The script reads the handful of secrets the lane needs over the REST API,
+      # unsets the token before fastlane starts, and is equally runnable by hand with the values
+      # already in the environment.
+      scripts/release-ios-testflight-buildkite.sh "$$version" "$$BUILDKITE_BUILD_NUMBER"
 
       mkdir -p "$$shared_dir/.bazel/bin/clients/apple/ios"
       rsync -a ".bazel/bin/clients/apple/ios/Pessimal.ipa" \

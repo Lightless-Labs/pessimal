@@ -31,6 +31,7 @@ require "tempfile"
 require "securerandom"
 require "tmpdir"
 require "fileutils"
+require "open-uri"
 
 default_platform(:ios)
 
@@ -141,7 +142,34 @@ def create_signing_keychain!
     timeout: 3600,
     lock_when_sleeps: true,
   )
+  import_wwdr_intermediates(@signing_keychain_path)
   password
+end
+
+# A .p12 carries the leaf and its key, not the intermediate that signs it. Without the intermediate in
+# a keychain on the search list, codesign reports an identity it cannot use -- and on a freshly cloned
+# CI guest there is no reason to assume the login keychain has one. Putting them in the ephemeral
+# keychain keeps them as disposable as the certificate.
+#
+# Several generations are current at once because which one signs a given certificate depends on when
+# it was issued, so each is attempted and only a total failure is fatal.
+def import_wwdr_intermediates(keychain_path)
+  generations = %w[G3 G4 G5 G6]
+  imported = generations.count do |generation|
+    begin
+      cer = File.join(File.dirname(keychain_path), "AppleWWDRCA#{generation}.cer")
+      URI.parse("https://www.apple.com/certificateauthority/AppleWWDRCA#{generation}.cer")
+         .open(read_timeout: 20) { |remote| File.binwrite(cer, remote.read) }
+      # An already-present certificate exits nonzero; that is a success for our purposes, so the
+      # outcome is judged by the count, not by this call.
+      quietly("security", "import", cer, "-k", keychain_path, "-T", "/usr/bin/codesign")
+    rescue StandardError => e
+      UI.important("WWDR #{generation} not imported: #{e.class}")
+      false
+    end
+  end
+  UI.user_error!("no Apple WWDR intermediate could be fetched; codesign will not trust the identity") if imported.zero?
+  UI.message("WWDR intermediates imported: #{imported} of #{generations.count}")
 end
 
 def remove_signing_keychain!
