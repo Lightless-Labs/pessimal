@@ -12,6 +12,10 @@
 	<string>Pessimal</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Pessimal uses only HTTPS, which is exempt. Absent, App Store Connect asks about export
+	     compliance on every single upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>

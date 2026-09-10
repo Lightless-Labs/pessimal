@@ -1,5 +1,8 @@
+load("@rules_apple//apple:apple.bzl", "local_provisioning_profile")
 load("@rules_apple//apple:ios.bzl", "ios_application")
+load("@rules_apple//apple:versioning.bzl", "apple_bundle_version")
 load("@rules_swift//swift:swift.bzl", "swift_library")
+load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcode_provisioning_profile")
 
 swift_library(
     name = "PessimalIOSLib",
@@ -12,6 +15,68 @@ swift_library(
     ],
 )
 
+# =============================================================================
+# Code signing
+# =============================================================================
+# Every profile target is tagged "manual" so `bazel build //...` does not try to resolve one on a
+# machine that has no profiles installed -- which is every CI runner.
+#
+# `local_provisioning_profile` searches ~/Library/MobileDevice/Provisioning Profiles and matches on
+# the profile's *Name* field, not its filename. Nothing here downloads anything: Xcode populates
+# that directory for development, and `fastlane sigh` does for distribution.
+#
+# The team is the same one every app in the band ships under, so it is written here rather than
+# threaded through a flag. `local_provisioning_profile` treats it as optional -- it only
+# disambiguates two accounts holding a profile of the same name -- but `xcode_provisioning_profile`
+# requires it, either directly or propagated from the profile it wraps.
+
+# Development signing, for running on a real device. Build once for device in Xcode first: that is
+# what creates the team profile this matches.
+local_provisioning_profile(
+    name = "local_profile",
+    profile_name = "iOS Team Provisioning Profile: *",
+    tags = ["manual"],
+    team_id = "PKPPLFK854",
+)
+
+# Lets `bazel run //:xcodeproj` hand signing back to Xcode for device debugging.
+xcode_provisioning_profile(
+    name = "xcode_profile",
+    managed_by_xcode = True,
+    provisioning_profile = ":local_profile",
+    tags = ["manual"],
+)
+
+# TestFlight and App Store signing. The profile name has to match in three places, and a mismatch
+# surfaces as "no profile found" at build time rather than as anything about naming:
+#   1. the name of the profile in the Apple Developer portal,
+#   2. profile_name here,
+#   3. IOS_APPS[:pessimal][:profile_name] in fastlane/Fastfile.
+local_provisioning_profile(
+    name = "distribution_profile",
+    profile_name = "com.lightless-labs.pessimal.ios",
+    tags = ["manual"],
+    team_id = "PKPPLFK854",
+)
+
+# =============================================================================
+# Versioning
+# =============================================================================
+# Fed by `--embed_label=<version>.<build>`, which fastlane passes. Without this target the label is
+# inert and CFBundleVersion stays whatever Info.plist says -- so every upload would carry the same
+# build number and App Store Connect would reject the second one.
+apple_bundle_version(
+    name = "app_version",
+    build_label_pattern = "{version}.{build}",
+    build_version = "{version}.{build}",
+    capture_groups = {
+        "version": "\\d+\\.\\d+\\.\\d+",
+        "build": "\\d+",
+    },
+    fallback_build_label = "0.1.0.1",
+    short_version_string = "{version}",
+)
+
 ios_application(
     name = "Pessimal",
     bundle_id = "com.lightless-labs.pessimal.ios",
@@ -20,6 +85,13 @@ ios_application(
     # 14.0 keeps parity with the macOS app's floor; SwiftUI's Observation needs 17 at runtime, and
     # the views guard accordingly rather than excluding older devices from the whole app.
     minimum_os_version = "17.0",
+    provisioning_profile = select({
+        "//:beta_build": ":distribution_profile",
+        "//:release_build": ":distribution_profile",
+        "//:ci_build": None,  # simulator, nothing to sign, and no profiles installed to find
+        "//conditions:default": ":xcode_profile",
+    }),
+    version = ":app_version",
     visibility = ["//visibility:public"],
     deps = [":PessimalIOSLib"],
 )

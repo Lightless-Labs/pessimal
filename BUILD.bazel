@@ -7,6 +7,33 @@ exports_files([
     "Cargo.lock",
 ])
 
+# =============================================================================
+# Build variants
+# =============================================================================
+# These exist so `clients/apple/ios` can select a provisioning profile without the BUILD file
+# knowing anything about who is building. Set by the .bazelrc configs of the same name; the
+# distribution variants deliberately extend `ci-base` rather than `ci`, because `ci` and a variant
+# both matching would make the select ambiguous rather than specialised.
+
+# A CI build has no provisioning profiles installed, so it signs nothing and targets the simulator.
+config_setting(
+    name = "ci_build",
+    define_values = {"ci": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "beta_build",
+    define_values = {"variant": "beta"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "release_build",
+    define_values = {"variant": "release"},
+    visibility = ["//visibility:public"],
+)
+
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "top_level_target", "xcodeproj")
 
 # Generate the Xcode project:  bazel run //:xcodeproj

@@ -12,11 +12,17 @@ build --@rules_rust//rust/toolchain/channel=stable
 # =============================================================================
 build:ios --apple_platform_type=ios
 
+# --ios_multi_cpus is not redundant with --platforms. rules_apple decides device-versus-simulator
+# from the legacy Apple CPU configuration, so --platforms=//platforms:ios_arm64 on its own produces
+# an arm64 bundle whose Info.plist still says DTPlatformName=iphonesimulator: unsignable, and
+# installable on nothing. Verified by inspecting the ipa.
 build:ios_device --config=ios
 build:ios_device --platforms=//platforms:ios_arm64
+build:ios_device --ios_multi_cpus=arm64
 
 build:ios_sim --config=ios
 build:ios_sim --platforms=//platforms:ios_sim_arm64
+build:ios_sim --ios_multi_cpus=sim_arm64
 
 # =============================================================================
 # Memory
@@ -32,12 +38,41 @@ build --disk_cache=~/.cache/bazel-pessimal
 build --symlink_prefix=.bazel/
 
 # =============================================================================
+# Shared by CI and every distribution variant
+# =============================================================================
+build:ci-base --show_progress_rate_limit=5
+build:ci-base --noshow_loading_progress
+build:ci-base --keep_going=false
+
+# =============================================================================
+# Distribution variants, driven by fastlane (see fastlane/Fastfile)
+# =============================================================================
+# compilation_mode=opt is not about speed. A fastbuild iOS binary carries the
+# get-task-allow entitlement, which TestFlight and the App Store both reject, so a
+# variant that forgets this fails at upload rather than at build -- after signing,
+# after the slow part.
+#
+# These extend ci-base rather than ci: `ci` and a variant both matching would make the
+# provisioning_profile select in //clients/apple/ios ambiguous rather than specialised, and the
+# simulator platform ci pins would leak into a device build.
+#
+# The target platform is deliberately absent -- fastlane adds `--config=ios_device` -- so that a
+# variant can also be built for the simulator to check that it compiles under opt.
+build:beta --config=ci-base
+build:beta --compilation_mode=opt
+build:beta --define variant=beta
+
+build:release --config=ci-base
+build:release --compilation_mode=opt
+build:release --define variant=release
+
+# =============================================================================
 # CI
 # =============================================================================
-build:ci --show_progress_rate_limit=5
-build:ci --noshow_loading_progress
-build:ci --keep_going=false
-# Signing is unavailable on a hosted runner, so a CI build targets the simulator.
+build:ci --config=ci-base
+# Signing is unavailable on a hosted runner: no certificate, and no provisioning profile in
+# ~/Library/MobileDevice. `ci=true` is what tells the app target to ask for neither.
+build:ci --define ci=true
 build:ci --config=ios_sim
 
 test --test_output=errors
