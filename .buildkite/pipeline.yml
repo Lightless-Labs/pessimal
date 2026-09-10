@@ -227,8 +227,12 @@ steps:
           # Holds a Doppler service token for lightless-labs-pessimal / prd_ios_deployment. The lane
           # reads the secrets; the guest never sees the vault beyond this one config.
           doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          # Only what is listed reaches the guest. An omission surfaces as a bare
+          # "parameter not set" from the guest's shell under `set -u`, naming the variable but not the
+          # reason, so keep this in step with what the command below actually reads.
           env:
             - BUILDKITE_TAG
+            - BUILDKITE_BUILD_NUMBER
     artifact_paths:
       - ".bazel/bin/clients/apple/ios/Pessimal.ipa"
     command: |
@@ -246,6 +250,9 @@ steps:
 
       # The version comes from the tag, never from a default, so a mis-tagged build cannot upload
       # under the wrong number.
+      : "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the plugin's env allowlist}"
+      : "$${BUILDKITE_BUILD_NUMBER:?not forwarded to the guest; add it to the plugin's env allowlist}"
+
       version="$${BUILDKITE_TAG#pessimal-ios-v}"
       if [[ ! "$$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$$ ]]; then
         echo "tag $$BUILDKITE_TAG does not carry a semver version" >&2
