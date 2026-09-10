@@ -15,8 +15,11 @@
 #   APP_STORE_CONNECT_API_KEY_ID                App Store Connect API key id
 #   APP_STORE_CONNECT_API_KEY_ISSUER_ID         its issuer id
 #   APP_STORE_CONNECT_API_KEY_BASE64            the .p8, base64
-#   APPLE_TEAM_ID                               the team that owns them
-#   GH_TOKEN                                    optional; release notes and tag push
+#   GITHUB_TOKEN                                optional; release notes and tag push
+#
+# APPLE_TEAM_ID is deliberately NOT fetched. A team ID is not a secret -- it is in every provisioning
+# profile and every signed binary -- and it is already written in clients/apple/ios/BUILD.bazel, which
+# has to agree with it. One copy of a constant beats two places to drift.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -27,6 +30,9 @@ VERSION="${1:-}"
 BUILD_NUMBER="${2:-}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "first argument must be a semver version, got '${VERSION}'"
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || fail "second argument must be a build number, got '${BUILD_NUMBER}'"
+
+# Same team for every app in the band. Overridable, but not a secret, and not in the vault.
+export APPLE_TEAM_ID="${APPLE_TEAM_ID:-PKPPLFK854}"
 
 DOPPLER_PROJECT="${DOPPLER_PROJECT:-lightless-labs-pessimal}"
 DOPPLER_CONFIG="${DOPPLER_CONFIG:-prd_ios_deployment}"
@@ -126,8 +132,7 @@ fetch_secret APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD
 fetch_secret APP_STORE_CONNECT_API_KEY_ID
 fetch_secret APP_STORE_CONNECT_API_KEY_ISSUER_ID
 fetch_secret APP_STORE_CONNECT_API_KEY_BASE64
-fetch_secret APPLE_TEAM_ID
-fetch_secret GH_TOKEN optional
+fetch_secret GITHUB_TOKEN optional
 
 # The service token's job is done. It must not reach fastlane, Bazel, or anything either of them
 # spawns: it opens the whole config, while everything below needs only what was just read.

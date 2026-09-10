@@ -12,8 +12,10 @@
 #   APP_STORE_CONNECT_API_KEY_ID                App Store Connect API key id
 #   APP_STORE_CONNECT_API_KEY_ISSUER_ID         its issuer id
 #   APP_STORE_CONNECT_API_KEY_BASE64            the .p8, base64
-#   APPLE_TEAM_ID                               the team that owns them (PKPPLFK854, band-wide)
-#   GH_TOKEN                                    for the release notes and tag push
+#   GITHUB_TOKEN                                optional; release notes and tag push
+#
+# APPLE_TEAM_ID is not among them. It is not a secret, and it already lives in
+# clients/apple/ios/BUILD.bazel; scripts/release-ios-testflight-buildkite.sh exports the one value.
 #
 # Run a lane with the config injected:
 #   doppler run -p lightless-labs-pessimal -c prd_ios_deployment -- bundle exec fastlane pessimal_beta_testflight

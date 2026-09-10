@@ -2,7 +2,7 @@
 #
 # Taken from the environment rather than hardcoded, because it is a property of the account and not
 # of this repository, and because the value belongs with the other signing secrets in Doppler. Set
-# APPLE_TEAM_ID in the iOS deployment config.
+# APPLE_TEAM_ID, which the release script exports. It is not a secret and is not in the vault.
 #
 # Note for whoever fills it in: the sibling project Pocket Companion signs under PKPPLFK854, and
 # Descartes' bundle identifier nests both organisation names, which suggests one Apple team covers
