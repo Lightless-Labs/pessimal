@@ -259,8 +259,11 @@ steps:
       # has; the guest image has whatever it was baked with, and refusing to ship over a patch
       # difference would be theatre. A mismatch is worth saying out loud, though, because it is the
       # first thing to suspect if the gems resolve differently here than they do locally.
+      # Shims on PATH, not `rbenv init`. The init script is shell-specific and emits bash completion
+      # code; the guest runs this command under zsh, where it dies at `complete: command not found`
+      # and takes the job with it under `set -e`. The shims are the whole point of rbenv here.
       if command -v rbenv >/dev/null 2>&1; then
-        eval "$$(rbenv init - bash)"
+        export PATH="$$(rbenv root)/shims:$$PATH"
       fi
       ruby_version="$$(ruby -e 'print RUBY_VERSION')"
       echo "ruby $$ruby_version"
