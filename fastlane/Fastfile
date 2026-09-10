@@ -39,10 +39,18 @@ default_platform(:ios)
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
 
-# Its own keychain, never the login one, and not in ~/Library/Keychains either: the host should come
-# out of a lane exactly as it went in. The certificate goes into a keychain inside a 0700 temp
-# directory, and both the keychain and the search-list entry are removed however the lane ends.
-SIGNING_KEYCHAIN_BASENAME = "pessimal-signing.keychain"
+# Its own keychain, never the login one, and deleted however the lane ends -- but in
+# ~/Library/Keychains rather than a temp directory, which is not a free choice.
+#
+# rules_apple signs inside a sandboxed Bazel action. A keychain under /var/folders is on the search
+# list and still invisible in there, and the only symptom is
+#
+#     ERROR: Unable to find an identity on the system matching the ones in ...mobileprovision
+#
+# arriving after the entire build has succeeded. ~/Library/Keychains is a path the sandbox permits.
+# Disposal is what keeps this clean, not location: the keychain is removed on the way out, and on a CI
+# guest the whole VM goes with it.
+SIGNING_KEYCHAIN_NAME = "pessimal-signing.keychain"
 
 IOS_APPS = {
   pessimal: {
@@ -111,8 +119,10 @@ end
 # temporary one per job in their old get-mac CI, which is the behaviour reproduced here, except that
 # it belongs to the lane so a run by hand gets it too.
 def create_signing_keychain!
-  @signing_keychain_dir = Dir.mktmpdir("pessimal-signing")
-  @signing_keychain_path = File.join(@signing_keychain_dir, SIGNING_KEYCHAIN_BASENAME)
+  @signing_keychain_path = File.expand_path("~/Library/Keychains/#{SIGNING_KEYCHAIN_NAME}")
+  # A keychain left by a killed earlier run would be inherited silently, which is the machine-state
+  # dependency this whole helper exists to avoid.
+  quietly("security", "delete-keychain", @signing_keychain_path)
   # Captured before anything is added, and restored verbatim on the way out: deleting a keychain is
   # supposed to drop it from the search list, and this makes that not have to be true. Restored
   # verbatim even when what was captured is wrong -- the host's keychain configuration belongs to the
@@ -181,16 +191,18 @@ def remove_signing_keychain!
   unless @original_search_list.nil? || @original_search_list.empty?
     quietly("security", "list-keychains", "-d", "user", "-s", *@original_search_list)
   end
-  FileUtils.remove_entry(@signing_keychain_dir) if @signing_keychain_dir && File.directory?(@signing_keychain_dir)
+  # security appends -db to the file it actually creates.
+  ["#{@signing_keychain_path}-db", @signing_keychain_path].each do |leftover|
+    File.delete(leftover) if File.exist?(leftover)
+  end
 ensure
   @signing_keychain_path = nil
-  @signing_keychain_dir = nil
   @original_search_list = nil
 end
 
 # Every lane that signs runs inside this. `ensure` covers a raised error and a fastlane
 # `user_error!`; the at_exit backstop covers an exit that unwinds some other way. Neither covers
-# SIGKILL, which is why the keychain is in a temp directory and not in ~/Library/Keychains.
+# SIGKILL; deleting any keychain of the same name at the *start* of a run is what covers that.
 def with_signing_keychain
   at_exit { remove_signing_keychain! }
   yield
