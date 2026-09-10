@@ -28,14 +28,17 @@ require "shellwords"
 require "base64"
 require "tempfile"
 require "securerandom"
+require "tmpdir"
+require "fileutils"
 
 default_platform(:ios)
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
 
-# Its own keychain, never the login one: the distribution certificate goes in, the build comes out,
-# and it is deleted. Nothing it holds outlives the lane.
-SIGNING_KEYCHAIN = "pessimal_signing.keychain"
+# Its own keychain, never the login one, and not in ~/Library/Keychains either: the host should come
+# out of a lane exactly as it went in. The certificate goes into a keychain inside a 0700 temp
+# directory, and both the keychain and the search-list entry are removed however the lane ends.
+SIGNING_KEYCHAIN_BASENAME = "pessimal-signing.keychain"
 
 IOS_APPS = {
   pessimal: {
@@ -88,24 +91,80 @@ def configure_app_store_connect_api_key_if_present
   )
 end
 
+# The user's keychain search list, as `security` reports it: one quoted path per line.
+def user_keychain_search_list
+  `security list-keychains -d user`.scan(/"([^"]*)"/).flatten
+end
+
+def quietly(*command)
+  system(*command, out: File::NULL, err: File::NULL)
+end
+
+# `import_certificate` does not create the keychain it imports into. It resolves the name to a path
+# and fails with "Could not locate the provided keychain" if nothing is there. Pocket Companion omits
+# the create step and works anyway, because its self-hosted runner has one left over from an earlier
+# run -- a dependency on machine state rather than a design. phil-connors and kumbaya made a
+# temporary one per job in their old get-mac CI, which is the behaviour reproduced here, except that
+# it belongs to the lane so a run by hand gets it too.
 def create_signing_keychain!
-  # `import_certificate` does not create the keychain it imports into. It resolves the name to a path
-  # under ~/Library/Keychains and fails with "Could not locate the provided keychain" if no such file
-  # exists. Pocket Companion omits this and works anyway, because its self-hosted runner has one left
-  # over from an earlier run -- which is a dependency on machine state, not a design.
+  @signing_keychain_dir = Dir.mktmpdir("pessimal-signing")
+  @signing_keychain_path = File.join(@signing_keychain_dir, SIGNING_KEYCHAIN_BASENAME)
+  # Captured before anything is added, and restored verbatim on the way out: deleting a keychain is
+  # supposed to drop it from the search list, and this makes that not have to be true. Restored
+  # verbatim even when what was captured is wrong -- the host's keychain configuration belongs to the
+  # host, and a build lane quietly rewriting it is its own kind of pollution.
+  @original_search_list = user_keychain_search_list
+
+  # A search list can be left holding paths that no longer exist -- a script that built the list from
+  # the indented, quoted output of `security list-keychains` without unquoting it is the usual way.
+  # codesign then finds no identities and says only that signing failed, so it is worth naming here.
+  dangling = @original_search_list.reject { |path| File.exist?(path) }
+  unless dangling.empty?
+    UI.important("The keychain search list holds #{dangling.count} path(s) that do not exist:")
+    dangling.each { |path| UI.important("  #{path}") }
+    UI.important("codesign searches this list. If signing fails with no identity found, repair it:")
+    UI.important("  security list-keychains -d user -s ~/Library/Keychains/login.keychain-db")
+  end
+
   password = SecureRandom.hex(24)
   create_keychain(
-    name: SIGNING_KEYCHAIN,
+    path: @signing_keychain_path,
     password: password,
     default_keychain: false, # never displace the login keychain
     unlock: true,
+    # codesign searches the list, so the identity has to be on it -- which is the one thing a lane
+    # cannot do without touching host configuration. Hence restoring the list afterwards.
+    add_to_search_list: true,
+    # Long enough that a cold Bazel build cannot lock it out from under codesign. The bound on how
+    # long the certificate is available is the lane's lifetime, not this.
     timeout: 3600,
-    lock_when_sleeps: false,
-    add_to_search_list: true, # codesign looks through the search list, so it has to be on it
+    lock_when_sleeps: true,
   )
-  # However the lane ends, including on failure.
-  at_exit { system("security", "delete-keychain", SIGNING_KEYCHAIN, out: File::NULL, err: File::NULL) }
   password
+end
+
+def remove_signing_keychain!
+  return if @signing_keychain_path.nil?
+
+  quietly("security", "delete-keychain", @signing_keychain_path)
+  unless @original_search_list.nil? || @original_search_list.empty?
+    quietly("security", "list-keychains", "-d", "user", "-s", *@original_search_list)
+  end
+  FileUtils.remove_entry(@signing_keychain_dir) if @signing_keychain_dir && File.directory?(@signing_keychain_dir)
+ensure
+  @signing_keychain_path = nil
+  @signing_keychain_dir = nil
+  @original_search_list = nil
+end
+
+# Every lane that signs runs inside this. `ensure` covers a raised error and a fastlane
+# `user_error!`; the at_exit backstop covers an exit that unwinds some other way. Neither covers
+# SIGKILL, which is why the keychain is in a temp directory and not in ~/Library/Keychains.
+def with_signing_keychain
+  at_exit { remove_signing_keychain! }
+  yield
+ensure
+  remove_signing_keychain!
 end
 
 def fetch_ios_signing(app)
@@ -115,11 +174,12 @@ def fetch_ios_signing(app)
   # hermetic path as a run on a build machine. Without the secret, codesign falls back to whatever
   # Apple Distribution identity the login keychain already holds.
   if ENV["APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64"]
+    keychain_password = create_signing_keychain!
     import_certificate(
       certificate_path: write_p12_to_temp,
       certificate_password: ENV.fetch("APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD"),
-      keychain_name: SIGNING_KEYCHAIN,
-      keychain_password: create_signing_keychain!,
+      keychain_path: @signing_keychain_path,
+      keychain_password: keychain_password,
     )
   else
     UI.important("No APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64; relying on the login keychain")
@@ -175,14 +235,21 @@ def upload_ios_testflight(app, options)
 end
 
 platform :ios do
-  desc "Import the distribution certificate and fetch the provisioning profile"
+  # The signing keychain does not outlive the process that made it, so `pessimal_fetch_signing`
+  # followed by a separate `fastlane pessimal_build` cannot share one. Each lane that signs sets up
+  # its own; use pessimal_beta_testflight for a real release.
+  desc "Check that the distribution certificate and provisioning profile resolve"
   lane :pessimal_fetch_signing do
-    fetch_ios_signing(ios_app!(:pessimal))
+    with_signing_keychain { fetch_ios_signing(ios_app!(:pessimal)) }
   end
 
   desc "Build the Pessimal ipa for a device"
   lane :pessimal_build do |options|
-    build_ios_app(ios_app!(:pessimal), options)
+    app = ios_app!(:pessimal)
+    with_signing_keychain do
+      fetch_ios_signing(app)
+      build_ios_app(app, options)
+    end
   end
 
   desc "Upload an already-built Pessimal ipa to TestFlight"
@@ -193,8 +260,10 @@ platform :ios do
   desc "Sign, build and upload a Pessimal beta to TestFlight"
   lane :pessimal_beta_testflight do |options|
     app = ios_app!(:pessimal)
-    fetch_ios_signing(app)
-    build_ios_app(app, options)
+    with_signing_keychain do
+      fetch_ios_signing(app)
+      build_ios_app(app, options)
+    end
     upload_ios_testflight(
       app,
       changelog: options[:changelog],
