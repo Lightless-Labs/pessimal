@@ -29,6 +29,17 @@ The caveat is time, not capability: ~12 minutes for a hello-world under this mem
 real builds to be slow here, and keep the JVM capped and `--jobs` low so Bazel does not compete with
 cargo for the little memory there is.
 
+## Resolved in full (2026-09-10)
+
+Bazel now builds the whole iOS chain: `rules_rust` 0.74.0 + `rules_apple` 4.3.3 + `rules_swift`
+3.4.1 + `rules_xcodeproj` 3.0.0 on Bazel 8.2.1, Rust 1.95, crate_universe against the same
+`Cargo.lock` cargo uses, producing `Pessimal.ipa`. Nothing below is blocking any more; it is kept
+because the memory advice still applies and because the wrong turn is worth remembering.
+
+One caution for anyone reading an old revision of this file: it previously said Bazel could not run
+here. That was wrong, and an agent later read it and skipped Bazel verification on its word. A stale
+"this does not work" note is more dangerous than no note.
+
 ## What is still open
 
 The macOS app currently builds with plain `swiftc` (following the sibling project Descartes) rather

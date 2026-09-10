@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-09
+**Updated:** 2026-09-10
 
 ## Current state
 
@@ -38,12 +38,16 @@
   `scripts/build-macos-app.sh` with plain `swiftc`. Verified launching as a `UIElement` with no Dock
   icon and a real status item. CI builds the bundle and asserts it is statically linked, has no
   leftover plist placeholders, and keeps `LSUIElement`.
-- **Bazel is not used.** It could not be made to run here at all (see
-  [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)),
-  and the sibling project Descartes already ships a notarized macOS app with `swiftc` and a
-  hand-assembled bundle, so the app follows that. **This contradicts the original brief and is the
-  owner's to settle**, especially for iOS, where App Store submission wants an Xcode project.
-- M6 (the iOS app) is unstarted; `clients/apple/ios` still holds a placeholder.
+- **Bazel builds the Apple clients**, on `rules_rust` 0.74.0 (not the siblings' 0.68.1, which
+  predates the 1.95 MSRV). The agents stay on Cargo. Both app builds coexist: Bazel for iOS,
+  `scripts/build-macos-app.sh` for macOS.
+- **M6 iOS app** — 17 Swift files at `clients/apple/ios/`, built end to end by Bazel to
+  `Pessimal.ipa`: Rust through crate_universe, the staticlib, the bindings as real objc/swift
+  modules, PessimalKit, the app library, the bundle. Verified arm64 with 40 uniffi symbols linked in.
+- **`clients/apple/PessimalKit/`** holds the Swift both apps share: `FleetModel`, the platform
+  stores, and the composition root. Its imports of the bindings are guarded with `canImport`, which
+  is load-bearing — Bazel compiles `PessimalFFI` as a real module while the macOS script compiles
+  everything into one module where it does not exist.
 
 ## Verifying the agent locally
 
@@ -115,7 +119,7 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # 
 
 ## Next up
 
-M5, the macOS menu bar app, which is where Bazel finally enters. Two things first:
+M7, additional query backends (Honeycomb, ClickStack), or the open items below. Two things first:
 
 1. Read [`todos/bazel-toolchain-must-provide-rust-1-95.md`](../todos/bazel-toolchain-must-provide-rust-1-95.md)
    before writing `MODULE.bazel`. MSRV is 1.95 and the sibling projects pin a `rules_rust` that
