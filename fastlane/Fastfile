@@ -18,8 +18,9 @@
 # Run a lane with the config injected:
 #   doppler run -p lightless-labs-pessimal -c prd_ios_deployment -- bundle exec fastlane pessimal_beta_testflight
 #
-# The project's other two configs belong to other jobs and are not read here: `prd_app-ios` holds
-# what the app itself needs at runtime, and `prd_macos_notarisation` serves scripts/notarize-macos-app.sh.
+# The project's other config belongs to another job and is not read here: `prd_macos_notarisation`
+# serves scripts/notarize-macos-app.sh. There is no app-runtime config, because the app asks the user
+# for the backend URL and key rather than shipping a shared one in the bundle.
 #
 # The provisioning profile is NOT a stored secret: it is fetched from the portal read-only with the
 # App Store Connect key, so it cannot drift out of date in a vault.

@@ -54,10 +54,11 @@
   see [`todos/ios-testflight-upload-is-unverified.md`](../todos/ios-testflight-upload-is-unverified.md)
   for what is left, which is the Apple portal and the first upload.
 - **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
-  Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`),
-  `prd_macos_notarisation` for `scripts/release-macos-app.sh`, and `prd_app-ios` for what the app
-  needs at runtime — which today is nothing, because the iOS app takes its backend URL and key from
-  the user rather than from a baked-in plist the way kumbaya does.
+  Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`) and
+  `prd_macos_notarisation` for `scripts/release-macos-app.sh`. There is deliberately no app-runtime
+  config: the iOS app takes its backend URL and key from the user and keeps the key in the Keychain,
+  rather than baking them into the bundle with a genrule the way kumbaya does. Adding one would mean
+  shipping a shared credential to every install.
 
 ## Verifying the agent locally
 
