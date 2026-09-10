@@ -1,0 +1,15 @@
+load("@rules_swift//swift:swift.bzl", "swift_library")
+
+# The Swift shared by both apps: the observable FleetModel and the platform stores.
+#
+# It exists because iOS and macOS need the same model, and the decisions inside it -- the
+# session-identity check that stops a replaced backend painting the old fleet, the rule about when
+# the cached roster may be dropped -- are exactly the kind that rot when copied. The macOS build
+# script compiles these same files directly; this target is how Bazel sees them.
+swift_library(
+    name = "PessimalKit",
+    srcs = glob(["Sources/**/*.swift"]),
+    module_name = "PessimalKit",
+    visibility = ["//visibility:public"],
+    deps = ["//clients/apple/PessimalFFI"],
+)

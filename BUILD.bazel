@@ -6,3 +6,23 @@ exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
+
+load("@rules_xcodeproj//xcodeproj:defs.bzl", "top_level_target", "xcodeproj")
+
+# Generate the Xcode project:  bazel run //:xcodeproj
+#
+# It exists for App Store submission and for anyone who wants to debug the iOS app in Xcode. The
+# Rust targets are deliberately absent from the project navigator: Bazel builds them, and listing
+# them would bury the Swift under a hundred external crates.
+xcodeproj(
+    name = "xcodeproj",
+    project_name = "Pessimal",
+    install_directory = "products/ios",
+    tags = ["manual"],
+    top_level_targets = [
+        top_level_target(
+            "//clients/apple/ios:Pessimal",
+            target_environments = ["device", "simulator"],
+        ),
+    ],
+)

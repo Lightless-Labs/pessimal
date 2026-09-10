@@ -1,0 +1,25 @@
+load("@rules_apple//apple:ios.bzl", "ios_application")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+
+swift_library(
+    name = "PessimalIOSLib",
+    srcs = glob(["Sources/**/*.swift"]),
+    module_name = "PessimalIOS",
+    tags = ["manual"],
+    deps = [
+        "//clients/apple/PessimalFFI",
+        "//clients/apple/PessimalKit",
+    ],
+)
+
+ios_application(
+    name = "Pessimal",
+    bundle_id = "com.lightless-labs.pessimal.ios",
+    families = ["iphone", "ipad"],
+    infoplists = ["Resources/Info.plist"],
+    # 14.0 keeps parity with the macOS app's floor; SwiftUI's Observation needs 17 at runtime, and
+    # the views guard accordingly rather than excluding older devices from the whole app.
+    minimum_os_version = "17.0",
+    visibility = ["//visibility:public"],
+    deps = [":PessimalIOSLib"],
+)
