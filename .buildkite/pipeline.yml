@@ -55,10 +55,24 @@ steps:
       # 1.95.0 toolchain, so only the cargo-driven steps see it -- which is why the iOS job passed
       # while the macOS bundle failed with a list of crates demanding 1.95.
       #
-      # `stable` rather than a pinned version, to match what .github/workflows/ci.yml installs. The
-      # workspace tracks stable deliberately; pinning here would quietly stop testing what GitHub does.
-      rustup toolchain install stable --profile minimal --component rustfmt,clippy
-      rustup default stable
+      # Gated on the measured version rather than installed unconditionally. The Linux guest's rustup
+      # lives in a root-owned /opt/rustup that the job user cannot write to, so an unconditional
+      # install fails there with EACCES -- and that image already ships a new enough toolchain, so the
+      # gate means it is never attempted. `stable` rather than a pinned version, to match what
+      # .github/workflows/ci.yml installs: the workspace tracks stable on purpose, and pinning here
+      # would quietly stop CI testing what GitHub tests.
+      msrv="1.95"
+      have="$$(cargo -V | awk '{print $$2}')"
+      echo "cargo reports $$have; MSRV is $$msrv"
+      if [[ "$$(printf '%s\n%s\n' "$$msrv" "$$have" | sort -V | head -1)" != "$$msrv" ]]; then
+        echo "the guest toolchain is behind MSRV; installing stable"
+        if [[ ! -w "$${RUSTUP_HOME:-$$HOME/.rustup}" ]]; then
+          export RUSTUP_HOME="$$HOME/.rustup-ci"
+        fi
+        rustup toolchain install stable --profile minimal --component rustfmt,clippy
+        rustup default stable
+        cargo -V
+      fi
       cargo --version
       cargo fmt --all --check
       cargo clippy --workspace --all-targets -- -D warnings
@@ -161,10 +175,24 @@ steps:
       # 1.95.0 toolchain, so only the cargo-driven steps see it -- which is why the iOS job passed
       # while the macOS bundle failed with a list of crates demanding 1.95.
       #
-      # `stable` rather than a pinned version, to match what .github/workflows/ci.yml installs. The
-      # workspace tracks stable deliberately; pinning here would quietly stop testing what GitHub does.
-      rustup toolchain install stable --profile minimal --component rustfmt,clippy
-      rustup default stable
+      # Gated on the measured version rather than installed unconditionally. The Linux guest's rustup
+      # lives in a root-owned /opt/rustup that the job user cannot write to, so an unconditional
+      # install fails there with EACCES -- and that image already ships a new enough toolchain, so the
+      # gate means it is never attempted. `stable` rather than a pinned version, to match what
+      # .github/workflows/ci.yml installs: the workspace tracks stable on purpose, and pinning here
+      # would quietly stop CI testing what GitHub tests.
+      msrv="1.95"
+      have="$$(cargo -V | awk '{print $$2}')"
+      echo "cargo reports $$have; MSRV is $$msrv"
+      if [[ "$$(printf '%s\n%s\n' "$$msrv" "$$have" | sort -V | head -1)" != "$$msrv" ]]; then
+        echo "the guest toolchain is behind MSRV; installing stable"
+        if [[ ! -w "$${RUSTUP_HOME:-$$HOME/.rustup}" ]]; then
+          export RUSTUP_HOME="$$HOME/.rustup-ci"
+        fi
+        rustup toolchain install stable --profile minimal --component rustfmt,clippy
+        rustup default stable
+        cargo -V
+      fi
       cargo --version
 
       scripts/build-macos-app.sh
