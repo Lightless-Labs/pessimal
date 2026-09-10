@@ -240,6 +240,21 @@ def fetch_ios_signing(app)
     )
   end
   UI.message("using the installed profile at #{profile_path}")
+
+  # Before the expensive part. rules_apple reports "Unable to find an identity on the system matching
+  # the ones in ...mobileprovision" only *after* the whole build, and that one message covers three
+  # different situations: no identity visible at all, an identity visible but the profile was built
+  # around a different certificate, or an identity without a usable private key. The diagnostic prints
+  # both sides and their intersection, so a mismatch costs seconds instead of three minutes of Bazel.
+  diagnostics = File.join(PROJECT_ROOT, "scripts", "signing-diagnostics.py")
+  if File.executable?(diagnostics)
+    command = [diagnostics, profile_path]
+    command << @signing_keychain_path if @signing_keychain_path
+    unless system(*command)
+      UI.user_error!("no codesigning identity here satisfies #{File.basename(profile_path)} -- see above")
+    end
+  end
+
   profile_path
 end
 
