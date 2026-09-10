@@ -27,10 +27,15 @@
 require "shellwords"
 require "base64"
 require "tempfile"
+require "securerandom"
 
 default_platform(:ios)
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
+
+# Its own keychain, never the login one: the distribution certificate goes in, the build comes out,
+# and it is deleted. Nothing it holds outlives the lane.
+SIGNING_KEYCHAIN = "pessimal_signing.keychain"
 
 IOS_APPS = {
   pessimal: {
@@ -83,15 +88,41 @@ def configure_app_store_connect_api_key_if_present
   )
 end
 
+def create_signing_keychain!
+  # `import_certificate` does not create the keychain it imports into. It resolves the name to a path
+  # under ~/Library/Keychains and fails with "Could not locate the provided keychain" if no such file
+  # exists. Pocket Companion omits this and works anyway, because its self-hosted runner has one left
+  # over from an earlier run -- which is a dependency on machine state, not a design.
+  password = SecureRandom.hex(24)
+  create_keychain(
+    name: SIGNING_KEYCHAIN,
+    password: password,
+    default_keychain: false, # never displace the login keychain
+    unlock: true,
+    timeout: 3600,
+    lock_when_sleeps: false,
+    add_to_search_list: true, # codesign looks through the search list, so it has to be on it
+  )
+  # However the lane ends, including on failure.
+  at_exit { system("security", "delete-keychain", SIGNING_KEYCHAIN, out: File::NULL, err: File::NULL) }
+  password
+end
+
 def fetch_ios_signing(app)
   configure_app_store_connect_api_key_if_present
 
-  if ENV["CI"]
+  # Keyed on the secret being available rather than on CI, so a first run by hand takes the same
+  # hermetic path as a run on a build machine. Without the secret, codesign falls back to whatever
+  # Apple Distribution identity the login keychain already holds.
+  if ENV["APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64"]
     import_certificate(
       certificate_path: write_p12_to_temp,
       certificate_password: ENV.fetch("APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD"),
-      keychain_name: "fastlane_tmp_keychain",
+      keychain_name: SIGNING_KEYCHAIN,
+      keychain_password: create_signing_keychain!,
     )
+  else
+    UI.important("No APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64; relying on the login keychain")
   end
 
   # readonly: never create or regenerate a profile from CI. A profile silently recreated on a build

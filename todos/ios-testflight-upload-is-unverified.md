@@ -31,6 +31,11 @@ doppler run -p lightless-labs-pessimal -c prd_ios_deployment -- \
   bundle exec fastlane pessimal_beta_testflight version:0.1.0 build_number:1
 ```
 
+The lane creates its own keychain for the distribution certificate and deletes it on the way out, so
+this needs nothing installed in the login keychain and leaves nothing behind. It does need the Apple
+WWDR intermediate certificate, which macOS usually already has; if codesign reports an untrusted
+identity, that is the missing piece and `security import AppleWWDRCA.cer` is the fix.
+
 ## Unverified beyond that
 
 - **No CI workflow drives this yet.** Pocket Companion's `pocket-companion-beta.yml` is the model:

@@ -56,8 +56,11 @@ build:ci-base --keep_going=false
 # provisioning_profile select in //clients/apple/ios ambiguous rather than specialised, and the
 # simulator platform ci pins would leak into a device build.
 #
-# The target platform is deliberately absent -- fastlane adds `--config=ios_device` -- so that a
-# variant can also be built for the simulator to check that it compiles under opt.
+# The target platform is deliberately absent: fastlane adds `--config=ios_device`, and leaving it out
+# here keeps the one flag that decides signing next to the one tool that can satisfy it. It does not
+# buy a simulator variant build -- `--config=beta --config=ios_sim` still fails looking for the
+# distribution profile, because Bazel builds the profile target whether or not the simulator bundle
+# would consume it. Use `--config=ci` to check that the app compiles without credentials.
 build:beta --config=ci-base
 build:beta --compilation_mode=opt
 build:beta --define variant=beta
