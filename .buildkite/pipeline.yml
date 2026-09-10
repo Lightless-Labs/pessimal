@@ -252,30 +252,44 @@ steps:
         exit 1
       fi
 
-      # macOS ships Ruby 2.6, where bundler cannot even find fastlane. Fail on the version rather than
-      # on a confusing missing-gem error twenty lines later.
+      # Ruby 3 is required: macOS ships 2.6, where bundler cannot even find fastlane.
       #
-      # The floor is checked, not the exact pin. .ruby-version records what the development machine
-      # has; the guest image has whatever it was baked with, and refusing to ship over a patch
-      # difference would be theatre. A mismatch is worth saying out loud, though, because it is the
-      # first thing to suspect if the gems resolve differently here than they do locally.
-      # Shims on PATH, not `rbenv init`. The init script is shell-specific and emits bash completion
-      # code; the guest runs this command under zsh, where it dies at `complete: command not found`
-      # and takes the job with it under `set -e`. The shims are the whole point of rbenv here.
+      # .ruby-version records what the development machine has, and rbenv treats that file as
+      # authoritative -- it refuses to run at all when the named version is absent, which is how the
+      # previous attempt died with "version `3.4.5' is not installed". RBENV_VERSION overrides it with
+      # the newest 3.x the image actually carries. Compiling a Ruby per job to match a patch release
+      # would cost several minutes to buy nothing.
       if command -v rbenv >/dev/null 2>&1; then
         export PATH="$$(rbenv root)/shims:$$PATH"
+        installed="$$(rbenv versions --bare 2>/dev/null | grep '^3\.' | sort -V | tail -1 || true)"
+        if [[ -n "$$installed" ]]; then
+          export RBENV_VERSION="$$installed"
+        fi
       fi
+
+      # Homebrew's Ruby as a second chance, for an image carrying no rbenv 3.x at all.
+      if ! ruby -e 'exit RUBY_VERSION.split(".").first.to_i >= 3' >/dev/null 2>&1; then
+        for candidate in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin; do
+          if [[ -x "$$candidate/ruby" ]]; then
+            export PATH="$$candidate:$$PATH"
+            break
+          fi
+        done
+      fi
+
       ruby_version="$$(ruby -e 'print RUBY_VERSION')"
       echo "ruby $$ruby_version"
       case "$$ruby_version" in
         3.*) ;;
-        *) echo "fastlane needs Ruby 3; this guest has $$ruby_version" >&2; exit 1 ;;
+        *) echo "fastlane needs Ruby 3; this guest offers only $$ruby_version" >&2; exit 1 ;;
       esac
       expected="$$(tr -d '[:space:]' < .ruby-version)"
       if [[ "$$ruby_version" != "$$expected" ]]; then
-        echo "note: .ruby-version asks for $$expected; the guest image has $$ruby_version"
+        echo "note: .ruby-version asks for $$expected; this guest has $$ruby_version"
       fi
 
+      # The selected Ruby may have no bundler. --conservative leaves an existing one alone.
+      gem install bundler --no-document --conservative
       bundle install --quiet
 
       # The Doppler service token the plugin injects opens the whole config, and there is no doppler
