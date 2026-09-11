@@ -78,8 +78,14 @@ Fleet list, host detail, alert configuration. Shares `PessimalKit` with the menu
 ### M7 — Additional backends
 Honeycomb and ClickStack query adapters behind the same port.
 
+### M8 — Usage reporting
+Opt-out traces from the clients and agents to our own SigNoz, so we see our own failures. Attribute
+allowlist enforced by construction; credential baked only into official builds. See
+[the plan](2026-09-11-m8-usage-reporting.md).
+
 ## Out of scope for now
 
 - Push notifications and any server component.
-- Log and trace collection. Metrics only.
+- Log and trace collection **from monitored hosts**. Metrics only. M8's traces are Pessimal
+  instrumenting itself, on a separate path to a separate destination.
 - Agent auto-update and packaged installers.
