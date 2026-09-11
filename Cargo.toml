@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "common/pessimal_core",
+    "common/pessimal_usage",
+    "common/pessimal_usage_otlp",
     "agents/common/pessimal_agent_core",
     "agents/host/pessimal_agent_host",
     "clients/common/pessimal_client_core",
@@ -20,6 +22,8 @@ authors = ["Pessimal contributors"]
 
 [workspace.dependencies]
 pessimal_core = { path = "common/pessimal_core" }
+pessimal_usage = { path = "common/pessimal_usage" }
+pessimal_usage_otlp = { path = "common/pessimal_usage_otlp" }
 pessimal_agent_core = { path = "agents/common/pessimal_agent_core" }
 pessimal_client_core = { path = "clients/common/pessimal_client_core" }
 pessimal_query_signoz = { path = "clients/common/query/pessimal_query_signoz" }

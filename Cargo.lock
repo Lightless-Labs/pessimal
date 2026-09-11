@@ -1436,6 +1436,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pessimal_usage"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "pessimal_usage_otlp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pessimal_usage",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
