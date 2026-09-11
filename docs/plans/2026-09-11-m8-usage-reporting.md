@@ -1,7 +1,7 @@
 # M8 — Usage reporting (Pessimal's own telemetry)
 
 **Created:** 2026-09-11
-**Status:** Spike complete; implementation next
+**Status:** Phase 1 built; one live verification outstanding
 
 ## Goal
 
@@ -283,10 +283,33 @@ early when full, fire-and-forget. That lands in the FFI session rather than in t
 
 ## Phases
 
-**Phase 1 — client.** Spike and the two crates are done. Remaining: session instrumentation and
-batching, FFI records, Swift consent + UI + privacy manifest, and the `--action_env` → `genrule` →
-plist → `infoDictionary` → FFI chain in the Buildkite iOS release step. Ends with a span from
-TestFlight visible in our SigNoz.
+**Phase 1 — client. Built.**
+
+- `common/pessimal_usage` — span types, the attribute allowlist, consent, the OTLP/JSON encoder.
+- `common/pessimal_usage_otlp` — the transport, with the explicit `ring` install step 4 showed is
+  mandatory in the agent's graph.
+- `pessimal_ffi::usage` — the process instance id in a `OnceLock` (never taken from Swift), the
+  bounded batching buffer, the `PollFailureKind` → `Outcome` mapping, and the FFI records.
+- `FleetSession` — instrumented around `poll`, `flush_usage()`, `usage_diagnostics()`. The reporter is
+  built in `assemble`, before anything can poll.
+- Swift — `UsageConsentStore` (its own store, outside `removeAll()`), `UsageReporting.record`,
+  `FleetModel.usageReportingEnabled` with the rebuild attached to the setter, the opt-out section with
+  the full disclosure on both apps, flush on `.background` inside a `beginBackgroundTask`, and
+  `PrivacyInfo.xcprivacy`.
+- Build — the `usage_plist` genrule, the guarded `--action_env` flags in the fastlane lane, and the
+  two optional Doppler secrets in the release script.
+
+**Outstanding:** a span from a release build visible in our SigNoz. Nothing local can prove that, and
+it is the one leg that matters — a loopback collector verified the encoding and nothing else.
+
+Two things deliberately left for a follow-up rather than rushed in:
+
+- **Child spans for `gather`.** One span per poll is what landed; per-request HTTP timing needs a sink
+  handle inside `pessimal_query_signoz`, which is a wider change than this increment. The
+  `ClientGather` and `ClientProbe` variants exist and are tested, so it is additive.
+- **A probe's own span.** `probe()` builds a throwaway session that is given no reporter, because
+  buffering into an object about to be dropped would report nothing and a probe against a URL the user
+  is still typing is not a fact worth having.
 
 **Phase 2 — agent.** `[usage_reporting]` config, `DO_NOT_TRACK` / `CI`, agent-side spans (startup,
 export cycle outcome, collection failure kind). Blocked on an agent release path existing, since

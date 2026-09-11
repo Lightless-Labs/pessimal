@@ -70,12 +70,24 @@
   build time. It is write-only and ingestion-only, like a Sentry DSN, and extractable from any IPA —
   which is why an ingestion proxy is the recorded upgrade path. Only official release builds carry
   it; see M8 below.
-- **M8 usage reporting — in progress.** `common/pessimal_usage` (pure: span types, the attribute
-  allowlist, consent, the OTLP/JSON encoder) and `common/pessimal_usage_otlp` (the transport) are
-  landed, tested and linted. The spike that preceded them is written up in
-  [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md) step 0. Not yet
-  done: the FFI session wiring, the Swift consent UI and privacy manifest, the Bazel key injection,
-  and — the one thing no local test can answer — a span confirmed visible in our own SigNoz.
+- **M8 usage reporting — phase 1 built, one verification outstanding.** Opt-out traces from the
+  clients to our own SigNoz. `common/pessimal_usage` (pure: span types, the attribute allowlist,
+  consent, the OTLP/JSON encoder), `common/pessimal_usage_otlp` (the transport), `pessimal_ffi::usage`
+  (instance id, batching, the `PollFailureKind` → `Outcome` mapping), `FleetSession` instrumented
+  around `poll` with `flush_usage()` and `usage_diagnostics()`, the Swift consent store and the opt-out
+  section on both apps, `PrivacyInfo.xcprivacy`, the `usage_plist` genrule, and the guarded
+  `--action_env` flags in the fastlane lane. The spike and the design are in
+  [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md).
+
+  **Still unproven: a span from a release build appearing in our SigNoz.** Everything local passes; a
+  loopback collector verified the encoding and nothing else, which is the lesson this repo already
+  learnt once. The credential flows from Doppler `prd_ios_deployment`
+  (`SIGNOZ_OTLP_ENDPOINT`, `SIGNOZ_OTLP_INGESTION_KEY`) and both are *optional* in the release script,
+  so a release without them reports nothing rather than failing.
+
+  Two follow-ups, both additive: child spans for `gather` (needs a sink handle inside
+  `pessimal_query_signoz`), and a span for `probe()` (its session is a throwaway and is given no
+  reporter on purpose).
 
 ## Verifying the agent locally
 
@@ -202,34 +214,21 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 
 ## Next up
 
-**M8 phase 1, the client**, in this order:
+**M8 phase 1 is built.** What remains:
 
-1. Mint `service.instance.id` in a `OnceLock<Uuid>` inside `pessimal_ffi`, **not** taken from Swift.
-   `UsageResource::new` accepts any `Uuid` and `HostId` is also a UUID, so this is the one runtime
-   value the allowlist does not structurally constrain. Per-process, so a `FleetSession` rebuilt on a
-   settings change does not rotate it.
-2. Batch in `FleetSession`, not in the sink: the sink is one request per call, so wiring it naively
-   is an HTTP request per poll. Bounded `Vec<UsageTrace>`, drop-oldest, drops counted in diagnostics,
-   flushed every few polls and on an FFI `flush_usage()` that Swift's `.background` handler awaits
-   with a ~2s cap inside a `beginBackgroundTask`.
-3. Map `CoreError` to `pessimal_usage::Outcome` at the session boundary, so the `String` is dropped
-   by construction rather than by care.
-4. Expose `DenialReason` and `DiagnosticsSnapshot` as FFI records, so Settings can say *which* switch
-   is in effect. A user who turned reporting off and still sees it off because of `CI=true` has no
-   other way to tell.
-5. Use `std::env::vars_os()` filtered to valid UTF-8 for the consent map. `vars()` panics on a
-   non-UTF-8 environment.
-6. Inject the credential **the way kumbaya and phil-connors already do**, not a third way:
-   `--action_env=SIGNOZ_OTLP_ENDPOINT=…` / `--action_env=SIGNOZ_OTLP_INGESTION_KEY=…` from the
-   release lane (guarded, so a local build passes no flag), a `genrule` expanding `$${VAR:-}` into a
-   plist merged into the bundle, Swift reading `Bundle.main.infoDictionary`, and
-   `Destination::from_bundle` across FFI. The header is `signoz-ingestion-key` — confirmed in four
-   places across both siblings, and *not* the `signoz-access-token` the agent preset sends to the
-   operator's collector. Their batching is worth copying too: 20 spans with a 5-second debounce,
-   flushed early when full.
-   Also check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under rules_rust, since no BUILD file
-   here passes `version` — the scope version would then differ between Cargo and Bazel.
-7. Fix `FleetStoreBridge` persisting 3 of its 6 fields *before* adding fields to it.
+1. **Verify live.** Cut a TestFlight build with the two Doppler secrets present and find the trace in
+   our SigNoz. `scripts/otlp-trace-probe.py` against the real ingest endpoint is the faster first
+   check — it answers "does the credential work and is the header right" in seconds, without a release.
+2. Child spans for `gather`, which needs `pessimal_query_signoz` to hold a sink handle.
+3. **M8 phase 2, the agent.** `[usage_reporting]` in the config, `DO_NOT_TRACK` and `CI` honoured
+   (both already implemented in `pessimal_usage::consent`), agent-side span variants, and
+   `Destination::from_build` fed by `option_env!`. Blocked on an agent release path existing, since
+   that is what would inject the credential.
+4. Fix `FleetStoreBridge` persisting 3 of its 6 fields. Untouched by M8 — the consent store is
+   deliberately separate from it — but still outstanding.
+5. Check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under rules_rust, since no BUILD file here
+   passes `version`. It only affects the reported scope version, so it is cosmetic, but it would differ
+   between the Cargo and Bazel builds.
 
 Then additional query backends (Honeycomb, ClickStack), or the open items below.
 
