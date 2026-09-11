@@ -98,6 +98,7 @@ public struct SettingsView: View {
                 }
             )
             warningsSection(candidate)
+            SettingsUsageReportingSection(model: model)
             statusSection
             footer(candidate)
         }

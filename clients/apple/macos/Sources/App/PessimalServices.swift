@@ -31,7 +31,13 @@ final class PessimalServices {
     init(platform: PlatformStores = .live) {
         let bridge = FleetStoreBridge(stores: platform)
         stores = bridge
-        fleet = FleetModel(settings: bridge, stateCache: bridge)
+        fleet = FleetModel(
+            settings: bridge,
+            stateCache: bridge,
+            // Its own store, deliberately outside what `SettingsStore.removeAll()` clears: "reset
+            // connection" must not revoke an opt-out. See `UsageConsentStore`.
+            usageConsent: platform.usageConsent
+        )
     }
 
     deinit {
@@ -67,8 +73,15 @@ final class PessimalServices {
     }
 
     /// Saves and stops. Idempotent.
+    ///
+    /// The usage batch is flushed *without* being awaited, and that is a deliberate difference from
+    /// the iOS app. `willTerminate` gives roughly as long as the main thread is willing to block, and
+    /// blocking it on a network request would turn a slow ingest endpoint into a Mac that takes ten
+    /// seconds to quit. Losing a batch of diagnostics is the better trade; the app is about to be
+    /// gone either way, and the next launch reports afresh.
     func terminate() {
         fleet.persistState()
+        Task { await fleet.flushUsageReporting() }
         fleet.teardown()
     }
 

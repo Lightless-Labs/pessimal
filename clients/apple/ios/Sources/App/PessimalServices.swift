@@ -13,6 +13,9 @@
 
 import Foundation
 import Observation
+#if canImport(UIKit)
+    import UIKit
+#endif
 #if canImport(PessimalKit)
     import PessimalKit
 #endif
@@ -42,6 +45,10 @@ final class PessimalServices {
         fleet = FleetModel(
             settings: bridge,
             stateCache: bridge,
+            // Its own store, read afresh at every session rebuild, and deliberately not one of the
+            // values `SettingsStore.removeAll()` clears — "reset connection" must not revoke an
+            // opt-out. See `UsageConsentStore`.
+            usageConsent: platform.usageConsent,
             // The model's own wake handling is an `NSWorkspace` notification, which does not exist
             // here — what it stands in for on iOS is the scene becoming active, and only the app
             // layer sees that. Said explicitly rather than left to the `#if` inside the model:
@@ -94,6 +101,46 @@ final class PessimalServices {
     func enterBackground() {
         fleet.suspend()
         fleet.persistState()
+        flushUsageReporting()
+    }
+
+    /// Sends the buffered usage batch before the process is suspended.
+    ///
+    /// Wrapped in `beginBackgroundTask` because that is the whole reason this is not fire-and-forget:
+    /// a bare `Task` started as the app is suspended is very likely never scheduled, so the batch
+    /// would sit in memory until the next launch rebuilt the session and dropped it. The expiry
+    /// handler ends the assertion whatever happens — an unbalanced `beginBackgroundTask` is a
+    /// watchdog termination, which would be a far worse bug than a lost batch.
+    ///
+    /// Nothing is awaited by the caller and nothing is reported. Diagnostics that could not be
+    /// delivered are not an event the user needs to hear about, and `enterBackground()` has a few
+    /// seconds of wall clock to spend, not a result to act on.
+    private func flushUsageReporting() {
+        #if canImport(UIKit)
+            var identifier = UIBackgroundTaskIdentifier.invalid
+            identifier = UIApplication.shared.beginBackgroundTask(withName: "pessimal.usage.flush") {
+                // Expired: iOS wants the assertion back now. Ending it is mandatory; the flush below
+                // is simply abandoned.
+                if identifier != .invalid {
+                    UIApplication.shared.endBackgroundTask(identifier)
+                    identifier = .invalid
+                }
+            }
+            guard identifier != .invalid else { return }
+
+            Task {
+                // A ceiling of our own, well inside the ~30s iOS grants, because the sink's own
+                // request timeout is 10s and a hung DNS lookup should not hold an assertion open.
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await self.fleet.flushUsageReporting() }
+                    group.addTask { try? await Task.sleep(for: .seconds(3)) }
+                    await group.next()
+                    group.cancelAll()
+                }
+                UIApplication.shared.endBackgroundTask(identifier)
+                identifier = .invalid
+            }
+        #endif
     }
 
     /// The app is on screen again: settle anything that could not be settled while it was not, then

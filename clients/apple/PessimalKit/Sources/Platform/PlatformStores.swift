@@ -1,10 +1,10 @@
 import Foundation
 
-/// The three places this app keeps things, handed to the Model layer as one value.
+/// The four places this app keeps things, handed to the Model layer as one value.
 ///
 /// Exists so a view model takes a single parameter with a single test substitute rather than three
 /// of each, and so there is one obvious place to see that the secret goes somewhere different from
-/// everything else. It holds three references and adds no behaviour: any logic that appears here —
+/// everything else. It holds four references and adds no behaviour: any logic that appears here —
 /// deciding what to do when the environment changes, choosing defaults for unset settings — belongs
 /// in the Model layer, which is the layer that can ask the core.
 public struct PlatformStores: Sendable {
@@ -14,11 +14,23 @@ public struct PlatformStores: Sendable {
     public let settings: any SettingsStore
     /// The cached fleet state a relaunch restores from.
     public let fleetState: any FleetStateStore
+    /// Whether the user has opted out of usage reporting.
+    ///
+    /// Its own store, not a fifth property on ``SettingsStore``, because `SettingsStore.removeAll()`
+    /// is what "reset connection" calls and an opt-out must not be collateral damage of clearing a
+    /// mistyped URL. See ``UsageConsentStore``.
+    public let usageConsent: any UsageConsentStore
 
-    public init(apiKey: any APIKeyStore, settings: any SettingsStore, fleetState: any FleetStateStore) {
+    public init(
+        apiKey: any APIKeyStore,
+        settings: any SettingsStore,
+        fleetState: any FleetStateStore,
+        usageConsent: any UsageConsentStore
+    ) {
         self.apiKey = apiKey
         self.settings = settings
         self.fleetState = fleetState
+        self.usageConsent = usageConsent
     }
 
     /// What the app runs on: the login keychain, `UserDefaults.standard`, and a file under
@@ -31,7 +43,8 @@ public struct PlatformStores: Sendable {
     public static let live = PlatformStores(
         apiKey: KeychainAPIKeyStore(),
         settings: UserDefaultsSettingsStore(),
-        fleetState: FileFleetStateStore()
+        fleetState: FileFleetStateStore(),
+        usageConsent: UserDefaultsUsageConsentStore()
     )
 
     /// What tests and previews run on: nothing outside the process.
@@ -41,8 +54,17 @@ public struct PlatformStores: Sendable {
     public static func inMemory(
         apiKey: InMemoryAPIKeyStore = InMemoryAPIKeyStore(),
         settings: InMemorySettingsStore = InMemorySettingsStore(),
-        fleetState: InMemoryFleetStateStore = InMemoryFleetStateStore()
+        fleetState: InMemoryFleetStateStore = InMemoryFleetStateStore(),
+        // Opted out by default in tests and previews, which is the opposite of the app's default and
+        // deliberately so: a preview must never be able to report, and a test asserting the opt-out
+        // path should not need a line of setup to get there.
+        usageConsent: InMemoryUsageConsentStore = InMemoryUsageConsentStore(optedOut: true)
     ) -> PlatformStores {
-        PlatformStores(apiKey: apiKey, settings: settings, fleetState: fleetState)
+        PlatformStores(
+            apiKey: apiKey,
+            settings: settings,
+            fleetState: fleetState,
+            usageConsent: usageConsent
+        )
     }
 }

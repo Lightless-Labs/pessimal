@@ -157,6 +157,11 @@ public final class FleetModel {
     @ObservationIgnored private let jitterFraction: Double
     @ObservationIgnored private let clock: () -> Date
 
+    /// Read afresh at every session rebuild, never cached. Toggling the switch in Settings rebuilds
+    /// the session, and that is what turns reporting on or off — there is no live sink to reconfigure,
+    /// because a sink only exists when consent allowed it to.
+    @ObservationIgnored private let usageConsent: any UsageConsentStore
+
     @ObservationIgnored private var session: FleetSession?
 
     /// The connection the live session was built from. Held so a config change can rebuild the
@@ -202,12 +207,17 @@ public final class FleetModel {
     public init(
         settings: any FleetSettingsStore,
         stateCache: any FleetStateCache,
+        // Defaults to opted *out*, which is the opposite of the app's default and deliberately so.
+        // A call site that forgets to pass this reports nothing; the failure mode of the alternative
+        // is reporting from a preview, a test, or a host that never consented. Fail closed.
+        usageConsent: any UsageConsentStore = InMemoryUsageConsentStore(optedOut: true),
         jitterFraction: Double = FleetModel.defaultJitterFraction,
         observesSystemWake: Bool = true,
         clock: @escaping () -> Date = { Date() }
     ) {
         self.settings = settings
         self.stateCache = stateCache
+        self.usageConsent = usageConsent
         self.jitterFraction = jitterFraction
         self.observesSystemWake = observesSystemWake
         self.clock = clock
@@ -266,7 +276,8 @@ public final class FleetModel {
                 baseUrl: connection.baseURL,
                 apiKey: connection.apiKey,
                 config: config,
-                cachedStateJson: cached
+                cachedStateJson: cached,
+                usage: usageReportingRecord()
             )
             adopt(rebuilt, connection: connection, config: config, warnings: try fleetConfigAudit(config: config))
             if !urlUnchanged {
@@ -413,7 +424,8 @@ public final class FleetModel {
                 baseUrl: connection.baseURL,
                 apiKey: connection.apiKey,
                 config: config,
-                cachedStateJson: exportedState() ?? stateCache.loadState()
+                cachedStateJson: exportedState() ?? stateCache.loadState(),
+                usage: usageReportingRecord()
             )
             // `setConfig` returns the audit; a constructor cannot, so ask for it by name. Same
             // function core calls, so the settings screen sees the same warnings either way.
@@ -476,9 +488,83 @@ public final class FleetModel {
             baseUrl: connection.baseURL,
             apiKey: connection.apiKey,
             config: config,
-            cachedStateJson: nil
+            cachedStateJson: nil,
+            // A probe's session is a throwaway built to answer one question and then dropped. Giving
+            // it a reporter would buffer a span into an object about to be discarded, and a probe
+            // against a URL the user is still typing is not a fact worth reporting.
+            usage: nil
         )
         return try await candidate.probe(nowMillis: Self.millis(clock()))
+    }
+
+    // MARK: - Usage reporting
+
+    /// Whether the user lets Pessimal report on itself.
+    ///
+    /// The setter writes the store **and rebuilds the session**, which is the whole mechanism rather
+    /// than a convenience: consent is read when a reporter is constructed, so there is no live sink to
+    /// reconfigure. Turning it off drops the object that could report; turning it on builds one.
+    ///
+    /// Exposed here rather than on ``FleetStoreBridge`` so that the write and the rebuild cannot be
+    /// separated by a caller who forgets the second half.
+    public var usageReportingEnabled: Bool {
+        get { !usageConsent.optedOut }
+        set {
+            // Correct as `newValue == usageConsent.optedOut`, and unreadable that way. Spelled against
+            // the getter so the condition says what it means: do nothing if this is already the case.
+            guard newValue != usageReportingEnabled else { return }
+            usageConsent.optedOut = !newValue
+            rebuildSessionForConsentChange()
+        }
+    }
+
+    /// Whether this build has a destination at all, consent aside.
+    ///
+    /// Shown in Settings so someone on a local build is told why the switch appears inert, rather than
+    /// concluding the feature is broken.
+    public nonisolated var usageReportingConfigured: Bool {
+        UsageDestination.fromBundle().isConfigured
+    }
+
+    /// Rebuilds the live session so a consent change takes effect, and does nothing if there is none.
+    ///
+    /// Goes through ``reloadSettings()`` rather than constructing a session here: that function already
+    /// knows how to carry the cache across a rebuild, when to drop it, and how to report a failure, and
+    /// a second copy of that reasoning is the thing to avoid. Its early-out compares the connection and
+    /// the config, neither of which has changed — so the session is dropped first, which is what makes
+    /// the rebuild happen.
+    private func rebuildSessionForConsentChange() {
+        guard session != nil else { return }
+        session = nil
+        reloadSettings()
+    }
+
+    /// The record a session is built with: this build's destination plus the user's current switch.
+    ///
+    /// Read at rebuild time rather than stored, so the switch takes effect the moment the session is
+    /// rebuilt. Nothing here can fail: a build with no destination produces a record with empty
+    /// strings, which the core reads as "nowhere to report".
+    private func usageReportingRecord() -> UsageReportingRecord {
+        UsageReporting.record(optedOut: usageConsent.optedOut)
+    }
+
+    /// Sends anything buffered, now. Call when the app is about to stop running.
+    ///
+    /// Awaiting is right *here* and nowhere else: the alternative at this moment is losing the batch
+    /// when the process is suspended. Everywhere else on the poll path, reporting is fire-and-forget.
+    ///
+    /// Returns normally whatever happened. A diagnostics batch that could not be sent is not
+    /// something the app, or the user, can act on.
+    public func flushUsageReporting() async {
+        await session?.flushUsage()
+    }
+
+    /// What usage reporting has managed to do, or why it is not doing it.
+    ///
+    /// `nil` before a session exists — a first launch with no backend configured has no reporter
+    /// either, and the settings screen shows the setup prompt rather than diagnostics.
+    public func usageDiagnostics() -> UsageDiagnosticsRecord? {
+        session?.usageDiagnostics()
     }
 
     // MARK: - Persistence

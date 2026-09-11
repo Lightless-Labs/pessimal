@@ -56,11 +56,29 @@ func smoke() async throws {
 
     // 2. The composition root. No request is made here: `new` validates the config through core and
     //    builds the timeout-carrying reqwest client.
+    // Usage reporting is pointed at the same dead loopback port, for the same reason the backend is:
+    // an export that cannot complete is the interesting case. A reporter built here must buffer, must
+    // never throw, and must leave the poll's answer untouched.
+    //
+    // `optedOut: false` and a non-empty destination, so a reporter genuinely exists — unless the
+    // environment denies it, which `CI=true` does, and the assertions below account for both.
+    let usage = UsageReportingRecord(
+        endpoint: "http://127.0.0.1:9",
+        ingestionKey: "swift-smoke-not-a-real-key",
+        optedOut: false,
+        platform: .macos,
+        deviceClass: .mac,
+        appVersion: "0.1.0",
+        appBuild: 1,
+        osVersion: "15.0"
+    )
+
     let session = try FleetSession(
         baseUrl: deadBackend,
         apiKey: "swift-smoke-not-a-real-key",
         config: config,
-        cachedStateJson: nil
+        cachedStateJson: nil,
+        usage: usage
     )
     try check(session.restoreReport() == nil, "no cache was handed in, so there is no restore report")
 
@@ -105,13 +123,46 @@ func smoke() async throws {
     try check(failures == 1, "exactly the one poll above failed")
     try check(carried?.kind == .unreachable, "the banner is handed the failure that routes its button")
 
-    // 6. The persistence round trip: the string one session exports is the string the next restores.
+    // 6. Usage reporting, over the same dead port. The claims are all negative, which is the point:
+    //    reporting must be incapable of affecting the poll it reports on.
+    let diagnostics = session.usageDiagnostics()
+    if diagnostics.enabled {
+        // A poll happened above, so a trace was buffered — but the batch threshold is higher than one,
+        // so nothing has been sent and nothing has failed. Reporting that rode along with the poll
+        // would mean the flush was awaited on the poll path, which is the bug this asserts against.
+        try check(diagnostics.sent == 0 && diagnostics.failed == 0,
+                  "one poll buffers a trace and sends nothing: a batch is not one span")
+        try check(diagnostics.buffered == 1, "exactly the one poll above was recorded")
+        try check(diagnostics.dropped == 0, "a single trace does not overflow the buffer")
+
+        // And the flush itself: awaited here, against a port that refuses instantly. It must return
+        // normally — `flushUsage` is not throwing, and a Swift `try` would not compile — and it must
+        // record the failure as data rather than hanging on a reactor that is not there.
+        await session.flushUsage()
+        let afterFlush = session.usageDiagnostics()
+        try check(afterFlush.failed == 1, "an unreachable ingest endpoint fails as data, once")
+        try check(afterFlush.buffered == 0, "the batch was drained whether or not it landed")
+        try check(afterFlush.sent == 0, "nothing was accepted by a port with nothing behind it")
+    } else {
+        // `CI=true` denies consent by design, so this is the expected path on a build agent. Assert
+        // the *reason*, so a genuine misconfiguration cannot hide behind this branch.
+        try check(diagnostics.denial == .continuousIntegration,
+                  "reporting is off only because this is CI")
+        try check(diagnostics.buffered == 0, "a denied session holds no reporter to buffer into")
+    }
+
+    // The poll's own answer must be untouched by any of that.
+    try check(view.backendName == result.view.backendName,
+              "reporting did not disturb the view the poll produced")
+
+    // 7. The persistence round trip: the string one session exports is the string the next restores.
     let exported = try session.exportState()
     let restored = try FleetSession(
         baseUrl: deadBackend,
         apiKey: "swift-smoke-not-a-real-key",
         config: config,
-        cachedStateJson: exported
+        cachedStateJson: exported,
+        usage: nil
     )
     guard let report = restored.restoreReport() else {
         throw SmokeFailure(description: "a session given a cache reports what it salvaged")
