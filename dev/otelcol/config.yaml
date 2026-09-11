@@ -11,6 +11,9 @@
 #     --config pessimal.example.toml
 #
 # Everything received is printed to the collector's stdout. Nothing is stored.
+#
+# Both pipelines are wired: host metrics from the agent, and the usage-reporting spans Pessimal
+# emits about itself (see docs/plans/2026-09-11-m8-usage-reporting.md).
 
 receivers:
   otlp:
@@ -30,5 +33,8 @@ service:
       level: info
   pipelines:
     metrics:
+      receivers: [otlp]
+      exporters: [debug]
+    traces:
       receivers: [otlp]
       exporters: [debug]
