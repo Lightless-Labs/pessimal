@@ -21,8 +21,12 @@
 #   doppler run -p lightless-labs-pessimal -c prd_ios_deployment -- bundle exec fastlane pessimal_beta_testflight
 #
 # The project's other config belongs to another job and is not read here: `prd_macos_notarisation`
-# serves scripts/notarize-macos-app.sh. There is no app-runtime config, because the app asks the user
-# for the backend URL and key rather than shipping a shared one in the bundle.
+# serves scripts/notarize-macos-app.sh.
+#
+# The app still asks the user for the backend URL and query key, and neither is ever baked in. The one
+# exception is the usage-reporting destination -- SIGNOZ_OTLP_ENDPOINT and SIGNOZ_OTLP_INGESTION_KEY,
+# passed to Bazel as --action_env below -- which is ours rather than theirs and so has to ship with the
+# build. Both are optional: a release without them reports nothing about itself.
 #
 # The provisioning profile is NOT a stored secret: it is fetched from the portal read-only with the
 # App Store Connect key, so it cannot drift out of date in a vault.

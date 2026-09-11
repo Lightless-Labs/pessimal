@@ -52,8 +52,21 @@
   end to end for the non-release jobs: the Rust workspace on a Linux guest, the iOS app through Bazel
   with the uniffi symbols asserted, and the macOS bundle with the Swift smoke test. GitHub Actions
   keeps the cross-platform matrix, which hosted runners do free on a public repo.
-- **M7 iOS release — done.** Build `0.1.0.26` reached TestFlight on 2026-09-11 from the mini and was
-  processed by App Store Connect. Tag `pessimal-ios-v*`, a block step, then sign, build and upload.
+- **M7 iOS release — done, and now continuous.** Build `0.1.0.26` reached TestFlight on 2026-09-11
+  from the mini and was processed by App Store Connect. **Every push to main that passes the three
+  verification steps now ships to TestFlight** — no tag, no block step. `[skip release]` in the commit
+  message opts a push out; a commit marker rather than a path filter, because a path filter that is
+  wrong stops shipping silently.
+
+  The tag gate it replaced was not merely friction: every verification step was `if: build.tag == null`,
+  so a tag build ran the release and *nothing else*, and the signed upload depended on nothing having
+  been verified. The release now `depends_on` all three. Tags are free for a future App Store
+  submission path, which should stay a deliberate act.
+
+  The marketing version comes from `[workspace.package] version` in `Cargo.toml` — already the single
+  source of truth for every crate — and the build number from `BUILDKITE_BUILD_NUMBER`, which cannot go
+  backwards. **Bumping that version is now the one manual step in a release**, and forgetting it means
+  TestFlight keeps accumulating builds under the same marketing version, which is valid but unhelpful.
   What it took is in
   [`solutions/the-ios-release-path-end-to-end.md`](solutions/the-ios-release-path-end-to-end.md).
 - **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party

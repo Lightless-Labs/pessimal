@@ -9,6 +9,10 @@
 # GitHub Actions keeps the cross-platform matrix (Linux, macOS, Windows) and the collector smoke test,
 # which hosted runners do for free on a public repo. Buildkite exists here for what hosted runners
 # cannot do: build the iOS app and sign it.
+#
+# Every push to main that passes verification ships to TestFlight. There is no tag to cut and no
+# button to press, which is the point -- a release that needs a human to remember it is a release that
+# drifts behind main. `[skip release]` in the commit message opts a push out.
 
 steps:
   - label: ":linux: Rust workspace"
@@ -23,7 +27,6 @@ steps:
           limit: 2
         - exit_status: 255
           limit: 2
-    if: build.tag == null
     # Linux guests are cheap and do not count against the macOS guest limit, so the Rust workspace
     # runs here and leaves the single macOS slot for Bazel and the Apple bundles.
     concurrency: 2
@@ -90,7 +93,6 @@ steps:
           limit: 2
         - exit_status: 255
           limit: 2
-    if: build.tag == null
     # Exactly ONE macOS guest at a time, shared with every other macOS job. Two concurrent macOS VMs
     # starve each other on this host; Descartes' pipeline records the build numbers where that was
     # diagnosed. Do not raise this to get a faster pipeline.
@@ -146,7 +148,6 @@ steps:
           limit: 2
         - exit_status: 255
           limit: 2
-    if: build.tag == null
     depends_on: ios-simulator
     concurrency: 1
     concurrency_group: "big-cabbage/tart-ci-macos"
@@ -199,21 +200,39 @@ steps:
       scripts/swift-smoke.sh
 
   # ---------------------------------------------------------------------------
-  # Release. Gated on a tag, and unverified: see
-  # todos/ios-testflight-upload-is-unverified.md. Nothing below has ever run.
+  # Release. Every push to main that passes the three steps above ships to
+  # TestFlight. No tag, no button.
+  #
+  # It used to be gated on a `pessimal-ios-v*` tag behind a block step, which was
+  # scaffolding from before the path had ever completed. Worse, it made the release
+  # the *only* step a tag build ran -- the three above are what a tag build skipped
+  # -- so the signed upload depended on nothing having been verified. `depends_on`
+  # below is the fix, and it is the real reason to do this rather than mere
+  # convenience.
+  #
+  # Tags are now unused here, and deliberately left free for an App Store
+  # submission path, which is a different decision from shipping to internal
+  # testers and should stay a deliberate act.
   # ---------------------------------------------------------------------------
-  - block: ":lock: Ship this tag to TestFlight"
-    key: release-gate
-    if: build.tag =~ /^pessimal-ios-v[0-9]+\.[0-9]+\.[0-9]+$$/
-    prompt: |
-      This signs with the Apple Distribution certificate and uploads to TestFlight.
-      It has never completed. Confirm the App ID, the distribution profile named
-      com.lightless-labs.pessimal.ios, and the App Store Connect record all exist.
-
   - label: ":rocket: iOS TestFlight"
     key: ios-testflight
-    depends_on: release-gate
-    if: build.tag =~ /^pessimal-ios-v[0-9]+\.[0-9]+\.[0-9]+$$/
+    # Ship only what passed. All three, not just the iOS build: a release whose
+    # workspace tests failed is a release that should not exist, and the macOS
+    # bundle step is where swift-smoke.sh proves the FFI boundary still works.
+    depends_on:
+      - rust-linux
+      - ios-simulator
+      - macos-bundle
+    # Trunk-based, so main is the only branch that ships. `build.tag == null` keeps
+    # a tag push from shipping a duplicate of the build its commit already
+    # produced. `[skip release]` in the commit message is the opt-out for a push
+    # that cannot affect the app -- a docs typo, a CI tweak -- and it is a commit
+    # message rather than a path filter on purpose: a path filter that is wrong
+    # stops shipping silently, whereas a marker the author types is visible in the
+    # log and fails towards shipping.
+    # One line, because every `if:` in the sibling pipelines is one line and none of them proves that
+    # Buildkite's expression parser accepts a YAML block scalar. Not the place to find out.
+    if: build.branch == "main" && build.tag == null && build.pull_request.id == null && build.message !~ /\[skip release\]/
     concurrency: 1
     concurrency_group: "big-cabbage/tart-ci-macos"
     agents:
@@ -231,8 +250,8 @@ steps:
           # "parameter not set" from the guest's shell under `set -u`, naming the variable but not the
           # reason, so keep this in step with what the command below actually reads.
           env:
-            - BUILDKITE_TAG
             - BUILDKITE_BUILD_NUMBER
+            - BUILDKITE_COMMIT
     artifact_paths:
       - ".bazel/bin/clients/apple/ios/Pessimal.ipa"
     command: |
@@ -248,16 +267,20 @@ steps:
       rsync -a --delete --exclude .git "$$shared_dir/" "$$work_dir/"
       cd "$$work_dir"
 
-      # The version comes from the tag, never from a default, so a mis-tagged build cannot upload
-      # under the wrong number.
-      : "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the plugin's env allowlist}"
       : "$${BUILDKITE_BUILD_NUMBER:?not forwarded to the guest; add it to the plugin's env allowlist}"
 
-      version="$${BUILDKITE_TAG#pessimal-ios-v}"
+      # The marketing version comes from the workspace manifest, which is already the single source of
+      # truth for every crate's version. One place to bump, and `cog bump` moves it.
+      #
+      # The build number is Buildkite's, which is monotonic for the life of the pipeline. App Store
+      # Connect rejects a CFBundleVersion it has seen before under the same marketing version, so the
+      # counter has to come from something that cannot go backwards -- not a commit count, not a date.
+      version="$$(awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0} f && /^version[[:space:]]*=/{gsub(/["[:space:]]/,"",$$0); sub(/^version=/,"",$$0); print; exit}' Cargo.toml)"
       if [[ ! "$$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$$ ]]; then
-        echo "tag $$BUILDKITE_TAG does not carry a semver version" >&2
+        echo "could not read a semver version from [workspace.package] in Cargo.toml (got '$$version')" >&2
         exit 1
       fi
+      echo "shipping $$version ($$BUILDKITE_BUILD_NUMBER) from $${BUILDKITE_COMMIT:-unknown commit}"
 
       # Ruby 3 is required: macOS ships 2.6, where bundler cannot even find fastlane.
       #
