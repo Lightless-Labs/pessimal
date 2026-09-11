@@ -202,6 +202,17 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
   run's lines are still there and will happily convince you a broken path works. Recreate the
   container.
 
+- **A commit-message marker is tripped by the commit that documents it.** The release opt-out matched
+  against the full `BUILDKITE_MESSAGE`, and the commit introducing it necessarily *explained* the
+  marker in its own body — so builds 32 and 33 both declined to ship, #33 reporting **success with no
+  ipa**, which is the most expensive shape of failure because it looks like a release. The marker is
+  now honoured on the **subject line only**, which also means it cannot live in the step's `if:`:
+  Buildkite's `build.message` is the whole message and cannot be narrowed. Buildkite's own `[skip ci]`
+  has the same trap.
+- **`broken_reason: conditional_failed` does not say which clause was false.** One-clause probe steps
+  on a cheap queue answer it in one build; guessing does not. Doing that disproved the theory that
+  `build.pull_request.id == null` fails when `build.pull_request` is itself null — it evaluates **true**,
+  and was a red herring for two builds.
 - **`cargo tree` shows a workspace-wide feature resolve, which is not what a single binary builds.**
   To get the feature set a binary *actually* compiles with, use
   `cargo build -p <pkg> --message-format=json` and read the `features` array on each

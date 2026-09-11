@@ -230,15 +230,16 @@ steps:
     # message rather than a path filter on purpose: a path filter that is wrong
     # stops shipping silently, whereas a marker the author types is visible in the
     # log and fails towards shipping.
-    # Cut down to the two constructs this cluster has actually run. Build #32 passed every
-    # verification step and then reported `broken_reason: conditional_failed` on this one, with the API
-    # showing `branch=main`, `tag=null` and `pull_request=null` — so something in the longer condition
-    # it used to carry does not evaluate the way its English reads. The two suspects were
-    # `build.pull_request.id` (a field access on a null parent) and `!~`, neither of which appears in
-    # any sibling pipeline; the probe steps below isolate them. Until they answer, this gate uses only
-    # what is known to work, because a release gate that silently never fires is worse than one that
-    # fires too often.
-    if: build.branch == "main" && build.tag == null
+    # All three clauses were measured by one-clause probe steps on build #33, because
+    # `broken_reason: conditional_failed` does not say which one was false. `build.branch == "main"`
+    # and `build.pull_request.id == null` both evaluated TRUE — the latter despite `build.pull_request`
+    # itself being null, so a field access on a null parent is fine here and was a red herring.
+    #
+    # What was false was a `build.message !~ /…/` clause that used to live here, and it was false for
+    # a reason that had nothing to do with Buildkite: the commit introducing the opt-out marker
+    # *documented the marker in its own message*, so the message genuinely contained it. See the skip
+    # check in the command below for how that is now avoided.
+    if: build.branch == "main" && build.tag == null && build.pull_request.id == null
     concurrency: 1
     concurrency_group: "big-cabbage/tart-ci-macos"
     agents:
@@ -276,12 +277,21 @@ steps:
 
       : "$${BUILDKITE_BUILD_NUMBER:?not forwarded to the guest; add it to the plugin's env allowlist}"
 
-      # The opt-out, checked here rather than in the step's `if`. It costs a guest boot to decline a
-      # release, which is the thing the opt-out was meant to save -- but it is plain bash that can be
-      # tested, and it prints why it declined. A condition that silently never fires is the failure
-      # this whole step just had.
-      if [[ "$${BUILDKITE_MESSAGE:-}" == *"[skip release]"* ]]; then
-        echo "commit message carries [skip release]; not shipping this push"
+      # The opt-out. The marker is honoured on the commit's SUBJECT LINE ONLY, and that restriction is
+      # the whole point rather than a nicety.
+      #
+      # Builds 32 and 33 were both lost to the obvious version of this: a check against the full
+      # message is tripped by any commit that *discusses* the marker, and the commit introducing it
+      # necessarily did. #32 skipped through the step's `if`, #33 through this check, and #33 reported
+      # success with no ipa -- the most expensive shape of failure, because it looks like a release.
+      #
+      # Reading only the first line means prose about the feature lives safely in the body, which is
+      # where documentation belongs. It also has to be here rather than in the `if:` condition:
+      # Buildkite's `build.message` is the whole message and cannot be narrowed to its first line.
+      subject="$$(printf '%s\n' "$${BUILDKITE_MESSAGE:-}" | head -1)"
+      if [[ "$$subject" == *"[skip release]"* ]]; then
+        echo "subject line asks to skip the release; not shipping this push"
+        echo "  subject: $$subject"
         exit 0
       fi
 
@@ -347,57 +357,3 @@ steps:
       mkdir -p "$$shared_dir/.bazel/bin/clients/apple/ios"
       rsync -a ".bazel/bin/clients/apple/ios/Pessimal.ipa" \
         "$$shared_dir/.bazel/bin/clients/apple/ios/Pessimal.ipa"
-
-  # ---------------------------------------------------------------------------
-  # TEMPORARY probes. Build #32's release step reported `conditional_failed` with
-  # every field the condition reads looking correct, and Buildkite does not say
-  # which clause was false. These isolate the two unproven constructs so the next
-  # build answers it instead of the next guess.
-  #
-  # Linux queue, so they cost a cheap guest and run beside everything else. Delete
-  # them, and this comment, once they have reported.
-  # ---------------------------------------------------------------------------
-  - label: ":mag: probe: branch == main"
-    key: probe-branch
-    if: build.branch == "main"
-    concurrency: 2
-    concurrency_group: "big-cabbage/tart-ci-linux"
-    agents:
-      queue: "ci-linux-arm64"
-    plugins:
-      - github.com/Lightless-Labs/tart-ci#v0.2.4:
-          image: "ci-linux-arm64-rust-bazel"
-          os: "linux"
-          always_pull: false
-          headless: true
-    command: echo 'build.branch == "main" evaluated true'
-
-  - label: ":mag: probe: pull_request.id == null"
-    key: probe-pr
-    if: build.pull_request.id == null
-    concurrency: 2
-    concurrency_group: "big-cabbage/tart-ci-linux"
-    agents:
-      queue: "ci-linux-arm64"
-    plugins:
-      - github.com/Lightless-Labs/tart-ci#v0.2.4:
-          image: "ci-linux-arm64-rust-bazel"
-          os: "linux"
-          always_pull: false
-          headless: true
-    command: echo 'build.pull_request.id == null evaluated true'
-
-  - label: ":mag: probe: message does not match"
-    key: probe-message
-    if: build.message !~ /\[skip release\]/
-    concurrency: 2
-    concurrency_group: "big-cabbage/tart-ci-linux"
-    agents:
-      queue: "ci-linux-arm64"
-    plugins:
-      - github.com/Lightless-Labs/tart-ci#v0.2.4:
-          image: "ci-linux-arm64-rust-bazel"
-          os: "linux"
-          always_pull: false
-          headless: true
-    command: echo 'build.message !~ /[skip release]/ evaluated true'
