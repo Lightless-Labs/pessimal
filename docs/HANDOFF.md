@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-10
+**Updated:** 2026-09-11
 
 ## Current state
 
@@ -61,12 +61,44 @@
   worked on first contact where sigh reported only "no matching profile found".
 - **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
   Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`) and
-  `prd_macos_notarisation` for `scripts/release-macos-app.sh`. There is deliberately no app-runtime
-  config: the iOS app takes its backend URL and key from the user and keeps the key in the Keychain,
-  rather than baking them into the bundle with a genrule the way kumbaya does. Adding one would mean
-  shipping a shared credential to every install.
+  `prd_macos_notarisation` for `scripts/release-macos-app.sh`.
+- **The query credential is still the user's**, taken from the settings screen and kept in the
+  Keychain — never baked into the bundle. The *usage-reporting* credential is the one exception, and
+  a deliberate reversal of the earlier "no app-runtime config" position, decided with the owner on
+  2026-09-11: opt-out reporting to our own backend needs a credential we supply, so
+  `SIGNOZ_OTLP_ENDPOINT` / `SIGNOZ_OTLP_INGESTION_KEY` from `prd_ios_deployment` are injected at
+  build time. It is write-only and ingestion-only, like a Sentry DSN, and extractable from any IPA —
+  which is why an ingestion proxy is the recorded upgrade path. Only official release builds carry
+  it; see M8 below.
+- **M8 usage reporting — in progress.** `common/pessimal_usage` (pure: span types, the attribute
+  allowlist, consent, the OTLP/JSON encoder) and `common/pessimal_usage_otlp` (the transport) are
+  landed, tested and linted. The spike that preceded them is written up in
+  [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md) step 0. Not yet
+  done: the FFI session wiring, the Swift consent UI and privacy manifest, the Bazel key injection,
+  and — the one thing no local test can answer — a span confirmed visible in our own SigNoz.
 
 ## Verifying the agent locally
+
+The dev collector config at `dev/otelcol/config.yaml` now has **both** a metrics and a traces
+pipeline — the latter for the usage spans of M8.
+
+**Docker does not work on the development mini.** It is itself a Tart guest (`hw.model =
+VirtualMac2,1`, `Apple M4 (Virtual)`), and Apple Silicon has no nested virtualisation, so colima's
+`vz` driver fails with "Virtualization is not available on this hardware". Use the native binary,
+which is faster anyway:
+
+```bash
+# https://github.com/open-telemetry/opentelemetry-collector-releases/releases
+#   otelcol-contrib_<version>_darwin_arm64.tar.gz
+./otelcol-contrib --config dev/otelcol/config.yaml
+
+# And to put a trace in front of it, including the Rust encoder's own output:
+scripts/otlp-trace-probe.py http://localhost:4318
+cargo run -q -p pessimal_usage --example emit_trace \
+  | scripts/otlp-trace-probe.py --stdin http://localhost:4318
+```
+
+On a machine where Docker does work:
 
 ```bash
 docker run --rm -p 4317:4317 -p 4318:4318 \
@@ -145,9 +177,57 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
   run's lines are still there and will happily convince you a broken path works. Recreate the
   container.
 
+- **`cargo tree` shows a workspace-wide feature resolve, which is not what a single binary builds.**
+  To get the feature set a binary *actually* compiles with, use
+  `cargo build -p <pkg> --message-format=json` and read the `features` array on each
+  `compiler-artifact`. And to exercise a dependency in a package's exact closure, add a temporary
+  `[[bin]]` to that package rather than a test — dev-dependencies unify into the test build and
+  change the answer.
+- **The agent enables both rustls providers at once, and that is a loaded gun.**
+  `opentelemetry-otlp`'s feature list carries `reqwest-rustls` (→ `aws-lc-rs`) and `tls-ring` (→
+  `ring`), so `rustls` compiles with both and `from_crate_features()` returns `None`. Any generic
+  `ClientConfig::builder()` in that graph panics with "Could not automatically determine the
+  process-level CryptoProvider". Nothing hits it today only because both of the agent's TLS paths
+  name a provider explicitly. Any crate using `reqwest/rustls-no-provider` that is linked into the
+  agent must install one itself first.
+- **Rust tests have no network egress on the dev mini; Python does.** A `reqwest` call to a public
+  host times out where `urllib` gets a 200. So anything that has to reach a real backend from here
+  goes through a Python script, and the `live_*` Rust tests are effectively CI-only.
+- **A 200 from an OTLP endpoint does not mean the span was stored**, and the folklore about *how*
+  OTLP/JSON fails is wrong in detail. Measured against otelcol-contrib 0.160.0: base64 ids are a
+  **400** with a clear message; an int64 sent as a JSON number is accepted *and exact*; a zeroed
+  `parentSpanId` on a root is accepted and normalised away. Emit the spec shape regardless — that
+  leniency is one receiver's, not OTLP's — and confirm delivery by finding the trace id in the
+  backend, not by reading the status.
+
 ## Next up
 
-M7, additional query backends (Honeycomb, ClickStack), or the open items below. Two things first:
+**M8 phase 1, the client**, in this order:
+
+1. Mint `service.instance.id` in a `OnceLock<Uuid>` inside `pessimal_ffi`, **not** taken from Swift.
+   `UsageResource::new` accepts any `Uuid` and `HostId` is also a UUID, so this is the one runtime
+   value the allowlist does not structurally constrain. Per-process, so a `FleetSession` rebuilt on a
+   settings change does not rotate it.
+2. Batch in `FleetSession`, not in the sink: the sink is one request per call, so wiring it naively
+   is an HTTP request per poll. Bounded `Vec<UsageTrace>`, drop-oldest, drops counted in diagnostics,
+   flushed every few polls and on an FFI `flush_usage()` that Swift's `.background` handler awaits
+   with a ~2s cap inside a `beginBackgroundTask`.
+3. Map `CoreError` to `pessimal_usage::Outcome` at the session boundary, so the `String` is dropped
+   by construction rather than by care.
+4. Expose `DenialReason` and `DiagnosticsSnapshot` as FFI records, so Settings can say *which* switch
+   is in effect. A user who turned reporting off and still sees it off because of `CI=true` has no
+   other way to tell.
+5. Use `std::env::vars_os()` filtered to valid UTF-8 for the consent map. `vars()` panics on a
+   non-UTF-8 environment.
+6. `rustc_env_files = glob(["usage-destination.env"], allow_empty = True)` on the
+   `pessimal_usage_otlp` `rust_library` — the crate where `option_env!` is evaluated, not the FFI
+   target. The file is **never tracked**: a tracked placeholder cannot be gitignored, and one
+   `git add -A` would publish the key. Check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under
+   rules_rust, since no BUILD file here passes `version` — the scope version would then differ
+   between Cargo and Bazel.
+7. Fix `FleetStoreBridge` persisting 3 of its 6 fields *before* adding fields to it.
+
+Then additional query backends (Honeycomb, ClickStack), or the open items below.
 
 1. ~~Read `todos/bazel-toolchain-must-provide-rust-1-95.md` before writing `MODULE.bazel`~~ — done.
    `MODULE.bazel` pins `rules_rust` 0.74.0 and Rust 1.95.0, and the iOS app builds. A

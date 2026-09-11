@@ -35,6 +35,9 @@ Three top-level Rust trees, plus the Apple client code:
 
 - `common/` — shared by both sides. `pessimal_core` is the hexagon: domain types, liveness policy,
   alert evaluation, and the ports adapters implement. It has no I/O and no async runtime.
+  `pessimal_usage` holds Pessimal's own usage reporting — span types, the attribute allowlist,
+  consent, and the OTLP/JSON encoder — also pure; `pessimal_usage_otlp` is the adapter that ships
+  them.
 - `agents/` — `agents/common/` holds what every agent shares (collection traits, OTLP export,
   config, backend presets); `agents/host/` is the host telemetry binary. Future agents get their
   own directory alongside it.
@@ -68,7 +71,9 @@ yet — do not add build instructions for them to the docs before they work.
 - All entities have a URN: `pessimal::$ENVIRONMENT::$SERVICE::$MODEL::$UUID`. The prefix is
   configurable per deployment for backward compatibility.
 - Metric names follow OpenTelemetry system semantic conventions. Pessimal's own instrumentation is
-  namespaced `pessimal.agent.*`.
+  namespaced `pessimal.agent.*` for the agents and `pessimal.client.*` for the clients.
+- Usage reporting may only emit attributes on `pessimal_usage::AttributeKey`. That is enforced by the
+  types, not by review: nothing in that crate accepts arbitrary text. Do not add an escape hatch.
 
 ## Naming Conventions
 
@@ -89,5 +94,12 @@ yet — do not add build instructions for them to the docs before they work.
 - The agent pulls `aws-lc-rs` transitively (reqwest's default rustls provider). That is fine for a
   server-side binary but is the usual source of iOS cross-compilation pain, so the *client* crates
   must choose their own reqwest TLS features rather than inheriting the agent's.
+- **The agent's graph enables *both* rustls providers.** `opentelemetry-otlp`'s features carry
+  `reqwest-rustls` (→ `aws-lc-rs`) and `tls-ring` (→ `ring`), and rustls refuses to pick between two
+  from crate features — `ClientConfig::builder()` panics with "Could not automatically determine the
+  process-level CryptoProvider". It does not bite today only because both of the agent's TLS paths
+  name a provider explicitly. So any crate using `reqwest/rustls-no-provider` that is linked into the
+  agent **must** call its own `install_crypto_provider()` first. Measured 2026-09-11; see
+  `docs/plans/2026-09-11-m8-usage-reporting.md` step 4.
 - Regenerating bindings means copying **both** the `.swift` and the `FFI.h` file. Copying only one
   produces link errors that look unrelated.
