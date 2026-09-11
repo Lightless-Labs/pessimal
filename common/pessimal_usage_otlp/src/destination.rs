@@ -20,7 +20,11 @@
 
 use std::fmt;
 
-/// The env var carrying the OTLP/HTTP base URL, e.g. `https://ingest.eu2.signoz.cloud`.
+/// The env var carrying the OTLP/HTTP endpoint.
+///
+/// A base URL or a full signal URL — `https://ingest.eu2.signoz.cloud:443` and
+/// `https://ingest.eu2.signoz.cloud:443/v1/traces` are the same destination. The Doppler secret holds
+/// the latter, and [`Destination::new`] strips it rather than appending a second copy.
 ///
 /// Named for the Doppler secret in `prd_ios_deployment` rather than prefixed `PESSIMAL_`, so the
 /// release script is a pass-through and there is no renaming step to get wrong.
@@ -121,9 +125,17 @@ impl Destination {
     /// and it should behave like no destination rather than like a destination that always fails.
     /// A plain-`http` endpoint is accepted only for loopback: a credential must not cross a network
     /// in clear text, but a developer pointing at a local collector should not have to fight this.
+    ///
+    /// A signal path already on the endpoint is **stripped**, so both `https://host` and
+    /// `https://host/v1/traces` name the same destination. This is not politeness; it is a bug fix.
+    /// The Doppler secret holds the full traces URL, so build 34 shipped with an endpoint that would
+    /// have had `/v1/traces` appended to it a second time and answered 404 on every span — silently,
+    /// since a report that fails is only ever a diagnostics counter. The same mistake is already in
+    /// this repo's handoff for the agent's exporter, where `with_endpoint()` is signal-specific and
+    /// posting to `/` 404s.
     #[must_use]
     pub fn new(endpoint: &str, header_name: &str, key: &str) -> Option<Self> {
-        let endpoint = endpoint.trim().trim_end_matches('/');
+        let endpoint = strip_signal_path(endpoint.trim()).trim_end_matches('/');
         let header_name = header_name.trim();
         let key = key.trim();
         if endpoint.is_empty() || header_name.is_empty() || key.is_empty() {
@@ -167,6 +179,22 @@ impl Destination {
     }
 }
 
+/// Removes an OTLP signal path from the end of an endpoint, so a base URL and a signal URL are
+/// accepted interchangeably.
+///
+/// `/v1/metrics` and `/v1/logs` are stripped too. Somebody configuring a traces destination with the
+/// metrics path has made a mistake, but the base URL is still what they meant, and recovering it
+/// beats appending to it and spending every report on a 404.
+fn strip_signal_path(endpoint: &str) -> &str {
+    let trimmed = endpoint.trim_end_matches('/');
+    for signal in ["/v1/traces", "/v1/metrics", "/v1/logs"] {
+        if let Some(base) = trimmed.strip_suffix(signal) {
+            return base;
+        }
+    }
+    endpoint
+}
+
 /// Whether an authority is loopback and nothing else.
 ///
 /// A prefix test is not enough: `localhost.acme.corp` starts with `localhost` and resolves to
@@ -205,6 +233,62 @@ mod tests {
         assert_eq!(
             destination.traces_url(),
             "https://ingest.example.com/v1/traces"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_that_already_names_the_signal_is_not_doubled_up() {
+        // The exact value Doppler holds, as build 34's log printed it. Appending to this is a 404 on
+        // every report, and a 404 here is silent.
+        let destination =
+            Destination::from_bundle("https://ingest.eu2.signoz.cloud:443/v1/traces", "key")
+                .expect("valid");
+        assert_eq!(
+            destination.traces_url(),
+            "https://ingest.eu2.signoz.cloud:443/v1/traces",
+            "the signal path must appear exactly once"
+        );
+    }
+
+    #[test]
+    fn a_base_url_and_a_signal_url_name_the_same_destination() {
+        let from_base = Destination::from_bundle("https://ingest.eu2.signoz.cloud", "key")
+            .expect("valid")
+            .traces_url();
+        for equivalent in [
+            "https://ingest.eu2.signoz.cloud/",
+            "https://ingest.eu2.signoz.cloud/v1/traces",
+            "https://ingest.eu2.signoz.cloud/v1/traces/",
+        ] {
+            assert_eq!(
+                Destination::from_bundle(equivalent, "key")
+                    .expect("valid")
+                    .traces_url(),
+                from_base,
+                "{equivalent} should resolve to the same traces URL"
+            );
+        }
+    }
+
+    #[test]
+    fn the_wrong_signal_path_is_recovered_rather_than_appended_to() {
+        // A misconfiguration, but the base URL is still what was meant.
+        let destination = Destination::from_bundle("https://ingest.example.com/v1/metrics", "key")
+            .expect("valid");
+        assert_eq!(
+            destination.traces_url(),
+            "https://ingest.example.com/v1/traces"
+        );
+    }
+
+    #[test]
+    fn a_host_whose_name_merely_ends_in_the_signal_path_is_left_alone() {
+        // Nothing to strip: the suffix has to be a path, and these have no path at all.
+        let destination =
+            Destination::from_bundle("https://v1.traces.example.com", "key").expect("valid");
+        assert_eq!(
+            destination.traces_url(),
+            "https://v1.traces.example.com/v1/traces"
         );
     }
 

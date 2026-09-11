@@ -202,6 +202,13 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
   run's lines are still there and will happily convince you a broken path works. Recreate the
   container.
 
+- **An OTLP endpoint may already carry its signal path, and appending a second one 404s silently.**
+  Doppler's `SIGNOZ_OTLP_ENDPOINT` holds `https://ingest.eu2.signoz.cloud:443/v1/traces`, so build 34
+  shipped posting to `…/v1/traces/v1/traces`. `Destination::new` now strips a trailing
+  `/v1/{traces,metrics,logs}`. Measured against the real endpoint **without a credential**, which is
+  the cheap way to answer it: the corrected URL answers **401 "No key"** — the path exists, it wants a
+  key — and the doubled URL answers **404 "not found"**. A status that distinguishes "wrong path" from
+  "wrong key" needs no secret to read.
 - **A commit-message marker is tripped by the commit that documents it.** The release opt-out matched
   against the full `BUILDKITE_MESSAGE`, and the commit introducing it necessarily *explained* the
   marker in its own body — so builds 32 and 33 both declined to ship, #33 reporting **success with no
