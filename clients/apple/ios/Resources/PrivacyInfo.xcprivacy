@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Apple's privacy manifest.
+
+  TestFlight accepted 0.1.0 without one; App Store review will not, now that the app collects
+  anything at all. Written to match what `pessimal_usage`'s attribute allowlist can actually emit,
+  which is narrower than any of these categories implies:
+
+  * NSPrivacyTracking is false. Nothing here is linked to an advertising identifier, joined with data
+    from another company, or used to target anyone. There is no IDFA and no IDFV in the app.
+  * Crashes and performance are declared because a span carries a poll's outcome and duration. They
+    are NOT linked to identity: `service.instance.id` is a UUID minted per launch and never
+    persisted, so two runs of the app cannot be joined together, let alone to a person.
+  * NSPrivacyAccessedAPITypes is empty and must stay that way until something here actually touches
+    one of the declared-reason APIs. Nothing does: the app reads no file timestamps, no disk space,
+    no active keyboards, and uses UserDefaults only for its own settings — which is reason CA92.1,
+    declared below because the opt-out itself lives there.
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeCrashData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePerformanceData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

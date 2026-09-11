@@ -134,6 +134,13 @@ fetch_secret APP_STORE_CONNECT_API_KEY_ISSUER_ID
 fetch_secret APP_STORE_CONNECT_API_KEY_BASE64
 fetch_secret GITHUB_TOKEN optional
 
+# Pessimal's own usage-reporting destination. Optional on purpose: a release built without them is a
+# release that reports nothing about itself, which is a worse release but not a broken one, and
+# failing the upload over a diagnostics credential would be the wrong trade. fastlane warns when they
+# are absent and omits the --action_env flags entirely.
+fetch_secret SIGNOZ_OTLP_ENDPOINT optional
+fetch_secret SIGNOZ_OTLP_INGESTION_KEY optional
+
 # The service token's job is done. It must not reach fastlane, Bazel, or anything either of them
 # spawns: it opens the whole config, while everything below needs only what was just read.
 unset DOPPLER_TOKEN

@@ -290,6 +290,28 @@ def build_ios_app(app, options)
     "--ios_multi_cpus=arm64",
   ]
 
+  # Pessimal's own usage-reporting destination, injected the way kumbaya and phil-connors do it: into
+  # a plist the `usage_plist` genrule writes, read back through `Bundle.main.infoDictionary`.
+  #
+  # Each flag is added ONLY when its value is present, which matters for two different reasons. A
+  # local or CI build passes neither, so the genrule writes empty strings and the app has nowhere to
+  # report — that is the "test builds cannot phone home" guarantee, and it is load-bearing rather than
+  # tidy. And an empty `--action_env` would still change the action key, so omitting it keeps a
+  # developer's cache warm.
+  #
+  # The values come from Doppler via scripts/release-ios-testflight-buildkite.sh. Never echoed: the
+  # key would land in the Buildkite log, and `--action_env` values are visible in `ps` for the life of
+  # the build, which is the one real cost of this mechanism and is acceptable on a single-tenant guest.
+  usage_endpoint = ENV["SIGNOZ_OTLP_ENDPOINT"].to_s
+  usage_key = ENV["SIGNOZ_OTLP_INGESTION_KEY"].to_s
+  if usage_endpoint.empty? || usage_key.empty?
+    UI.important("No usage-reporting destination in the environment; this build will report nothing")
+  else
+    bazel_args << "--action_env=SIGNOZ_OTLP_ENDPOINT=#{usage_endpoint.shellescape}"
+    bazel_args << "--action_env=SIGNOZ_OTLP_INGESTION_KEY=#{usage_key.shellescape}"
+    UI.message("Usage reporting will be built in (endpoint #{usage_endpoint}, key not shown)")
+  end
+
   sh("bazelisk", *bazel_args)
 
   ipa_path = app.fetch(:ipa_path)

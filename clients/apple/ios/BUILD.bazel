@@ -77,6 +77,42 @@ apple_bundle_version(
     short_version_string = "{version}",
 )
 
+# =============================================================================
+# Usage-reporting destination
+# =============================================================================
+# Pessimal's own traces go to Lightless Labs' SigNoz, opt-out. The destination is injected at build
+# time exactly the way kumbaya and phil-connors do it, rather than through a third mechanism:
+#
+#   bazel build //clients/apple/ios:Pessimal \
+#       --action_env=SIGNOZ_OTLP_ENDPOINT=https://ingest.eu2.signoz.cloud \
+#       --action_env=SIGNOZ_OTLP_INGESTION_KEY=...
+#
+# `PessimalServices.swift` reads these from `Bundle.main.infoDictionary` and hands them to
+# `FleetSession`, which builds a reporter only if consent also allows one.
+#
+# `$${VAR:-}` expands to an EMPTY STRING when the variable is unset, and that is the whole
+# "test builds cannot phone home" guarantee: `Destination::from_bundle` treats empty as no
+# destination at all, so a `--config=ci` simulator build — which is never given the flags — reports
+# nothing by construction rather than by a runtime check. The key is never committed; it reaches the
+# build only from Doppler, through the release lane.
+genrule(
+    name = "usage_plist",
+    outs = ["UsageConfig.plist"],
+    cmd = """cat > $@ << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>SIGNOZ_OTLP_ENDPOINT</key>
+    <string>$${SIGNOZ_OTLP_ENDPOINT:-}</string>
+    <key>SIGNOZ_OTLP_INGESTION_KEY</key>
+    <string>$${SIGNOZ_OTLP_INGESTION_KEY:-}</string>
+</dict>
+</plist>
+PLISTEOF""",
+)
+
 ios_application(
     name = "Pessimal",
     bundle_id = "com.lightless-labs.pessimal.ios",
@@ -85,7 +121,17 @@ ios_application(
     # icon is rejected after the upload, which is the slowest possible place to learn it.
     app_icons = glob(["Resources/AppIcon.xcassets/**"]),
     families = ["iphone", "ipad"],
-    infoplists = ["Resources/Info.plist"],
+    infoplists = [
+        "Resources/Info.plist",
+        ":usage_plist",
+    ],
+    # Apple's privacy manifest, required at App Store review now that the app collects anything at all
+    # — TestFlight let 0.1.0 through without one.
+    #
+    # Through `resources` rather than a dedicated attribute: this rules_apple has no
+    # `privacy_manifests`, and naming an attribute that does not exist is an analysis failure rather
+    # than a warning. `resources` places the file at the bundle root, which is where Apple looks.
+    resources = ["Resources/PrivacyInfo.xcprivacy"],
     # 14.0 keeps parity with the macOS app's floor; SwiftUI's Observation needs 17 at runtime, and
     # the views guard accordingly rather than excluding older devices from the whole app.
     minimum_os_version = "17.0",
