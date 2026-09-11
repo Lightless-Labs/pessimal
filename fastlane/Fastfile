@@ -39,17 +39,20 @@ default_platform(:ios)
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
 
-# Its own keychain, never the login one, and deleted however the lane ends -- but in
-# ~/Library/Keychains rather than a temp directory, which is not a free choice.
+# Its own keychain, never the login one, and deleted however the lane ends.
 #
-# rules_apple signs inside a sandboxed Bazel action. A keychain under /var/folders is on the search
-# list and still invisible in there, and the only symptom is
+# ~/Library/Keychains rather than a temp directory, and the reason is weaker than it first looks: this
+# location is the one *proven* to sign from inside a sandboxed Bazel action, and it is where the sibling
+# projects put theirs. A temp-directory keychain was tried and blamed for
 #
 #     ERROR: Unable to find an identity on the system matching the ones in ...mobileprovision
 #
-# arriving after the entire build has succeeded. ~/Library/Keychains is a path the sandbox permits.
-# Disposal is what keeps this clean, not location: the keychain is removed on the way out, and on a CI
-# guest the whole VM goes with it.
+# but that turned out to be two different Apple Distribution certificates in one team, and moving the
+# keychain was not what fixed it. So whether /var/folders also works is simply unknown -- do not repeat
+# the claim that the sandbox cannot read it, which was a guess that happened to sit next to a fix.
+#
+# Disposal is what keeps this clean, not location: the keychain is removed on the way out, any keychain
+# of the same name is removed at the start of a run, and on a CI guest the whole VM goes with it.
 SIGNING_KEYCHAIN_NAME = "pessimal-signing.keychain"
 
 IOS_APPS = {

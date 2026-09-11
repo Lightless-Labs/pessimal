@@ -14,6 +14,8 @@
 	<string>APPL</string>
 	<!-- Pessimal uses only HTTPS, which is exempt. Absent, App Store Connect asks about export
 	     compliance on every single upload. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleShortVersionString</key>
@@ -30,8 +32,13 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Pessimal contributors. GNU AGPL-3.0-or-later.</string>
