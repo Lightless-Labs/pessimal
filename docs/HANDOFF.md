@@ -52,19 +52,13 @@
   end to end for the non-release jobs: the Rust workspace on a Linux guest, the iOS app through Bazel
   with the uniffi symbols asserted, and the macOS bundle with the Swift smoke test. GitHub Actions
   keeps the cross-platform matrix, which hosted runners do free on a public repo.
-- **The iOS release path reaches codesign and stops there.** The distribution profile and the
-  certificate in the vault are a mismatched pair — two Apple Distribution certificates exist for the
-  same team. See
-  [`todos/ios-testflight-upload-is-unverified.md`](../todos/ios-testflight-upload-is-unverified.md);
-  it needs a decision about which certificate is canonical, not a code change.
+- **M7 iOS release — done.** Build `0.1.0.26` reached TestFlight on 2026-09-11 from the mini and was
+  processed by App Store Connect. Tag `pessimal-ios-v*`, a block step, then sign, build and upload.
+  What it took is in
+  [`solutions/the-ios-release-path-end-to-end.md`](solutions/the-ios-release-path-end-to-end.md).
 - **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party
   packages: ES256 JWTs are signed by shelling out to `openssl`. It replaced sigh's profile fetch and
   worked on first contact where sigh reported only "no matching profile found".
-- **The iOS release path is wired but never run.** `clients/apple/ios/BUILD.bazel` carries the
-  profile `select()` and `apple_bundle_version`; `fastlane/` carries the lanes, mirroring Pocket
-  Companion's secret names and division of labour. Everything a local machine can check is checked —
-  see [`todos/ios-testflight-upload-is-unverified.md`](../todos/ios-testflight-upload-is-unverified.md)
-  for what is left, which is the Apple portal and the first upload.
 - **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
   Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`) and
   `prd_macos_notarisation` for `scripts/release-macos-app.sh`. There is deliberately no app-runtime
