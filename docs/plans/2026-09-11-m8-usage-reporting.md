@@ -30,7 +30,7 @@ instrumenting *itself*, on a separate export path, to a separate destination.
 | **Hand-rolled OTLP/HTTP JSON**, no `opentelemetry-otlp` on the client | `opentelemetry-otlp`'s `reqwest-rustls` routes through reqwest's default provider, i.e. `aws-lc-rs` — the exact thing `pessimal_query_signoz` was written to avoid for iOS. Its `PeriodicReader` is also a forever-task, wrong for a backgrounded app. A handful of spans does not need an SDK. |
 | The **core stays pure** | Spans are emitted from `pessimal_ffi::session` around `poll()`/`probe()`, and from the query adapter for HTTP timing. `pessimal_client_core` gains no sink, no reqwest, no tokio. |
 | Attributes are an **allowlist enforced by construction** | See [What leaves the device](#what-leaves-the-device). The span builders accept enums and numbers, never a free `String`, so a future edit cannot casually attach someone's hostname. |
-| The credential is **baked at build time**, absent from source builds | `option_env!`. A `cargo build` or a `--config=ci` simulator build has no key, so it cannot report — test builds phoning home is designed out rather than configured out. |
+| The credential is **injected at build time**, absent from source builds | `--action_env` into a genrule'd plist for the apps, `option_env!` for the agent: kumbaya's and phil-connors' mechanism rather than a third one. A `cargo build` or a `--config=ci` simulator build has no key, so it cannot report — test builds phoning home is designed out rather than configured out. |
 | **Direct to SigNoz**, not through an ingestion proxy | Matches the `SIGNOZ_OTLP_ENDPOINT` / `SIGNOZ_OTLP_INGESTION_KEY` pair already in Doppler. A proxy (Worker in front of SigNoz) would be strictly better — rotate the key without an app release, rate-limit abuse, nothing extractable from the IPA — and is the recorded upgrade path, not phase 1. |
 | One transport for both sides, installing `ring` **explicitly** | The agent already enables both rustls providers, so crate-feature resolution panics there. Measured in step 4. An explicit install makes one shared adapter safe everywhere and costs a `Once`. |
 | **Client first, agent second** | The agent has no CI release path yet, so nothing would inject its key. The shared crates land with the client; the agent's wiring follows. |
@@ -162,12 +162,20 @@ We emit the spec shape regardless: the leniency belongs to this receiver, not to
 backend owes us nothing. But the claim in the probe's own docstring has been corrected to what was
 measured rather than what was assumed.
 
-### 3. Which SigNoz header, and does the span become queryable — **open**
+### 3. Which SigNoz header — **answered, from the sibling projects**
 
-Blocked on the ingestion endpoint and an ephemeral key. The existing preset sends
-`signoz-access-token`; the Doppler secret is named an *ingestion* key, and SigNoz Cloud wants
-`signoz-ingestion-key`. Still not a thing to assume. The check is the trace id appearing in the
-Traces UI, not the HTTP status.
+Not by asking, and not by guessing: `signoz-ingestion-key`, which kumbaya and phil-connors both send
+to the same SigNoz, from their Rust servers *and* their Swift clients. Four independent places agree.
+The endpoint is `https://ingest.eu2.signoz.cloud`.
+
+This is **not** the `signoz-access-token` that `pessimal_agent_core`'s preset sends. That one goes to
+the *operator's* collector — a different endpoint with a different credential — and confusing the two
+would be a silent non-delivery. `the_ingestion_header_is_not_the_operators_access_token` asserts the
+distinction so it cannot quietly drift.
+
+What the siblings cannot answer is whether a span from *this* code becomes queryable in our SigNoz.
+That stays open until a release build runs, and the check is the trace id appearing in the Traces UI
+rather than the HTTP status.
 
 ### 4. There is no two-reqwest-major problem. There is a provider problem, and it predates this work
 
@@ -204,27 +212,54 @@ the agent it is what stops a panic. Tightening the agent's own feature set — d
 `reqwest-rustls` / `tls-ring` — is a separate change with its own blast radius, noted as a follow-up
 rather than smuggled in here.
 
-### 5. `rustc_env_files` carries the credential into `option_env!`
+### 5. Injection: the siblings' mechanism, not a new one
 
-Verified against `rules_rust` by attaching an env file to an existing `rust_test` target:
+`rustc_env_files` + `option_env!` was verified to work under `rules_rust` — values reach
+`option_env!`, an absent name gives `None`, an empty file also gives `None` rather than `Some("")`,
+and a changed value invalidates the cached action. It is **not** what we use, because both sibling
+projects already solve this and their way is simpler:
 
-- `option_env!("PESSIMAL_USAGE_OTLP_ENDPOINT")` → `Some("https://…")`, and an unset name → `None`.
-- Changing a value **does** invalidate the cached action: the next build recompiled and saw the new
-  value, so a keyless cached build cannot be silently reused.
-- An **empty** env file yields `None`, not `Some("")`. That is the committed default, which gives the
-  "test builds cannot phone home" guarantee by construction rather than by a runtime check.
+```ruby
+# fastlane, guarded so a local build passes no flag at all
+signoz_key = ENV["SIGNOZ_OTLP_INGESTION_KEY"].to_s
+bazel_args << "--action_env=SIGNOZ_OTLP_INGESTION_KEY=#{signoz_key}" unless signoz_key.empty?
+```
 
-Chosen over `--define` + `rustc_env` deliberately: a `--define` value lands on the Bazel command
-line, where it is visible in `ps` and in whatever the CI step echoes. A file written by the release
-script is not.
+A `genrule` then expands it into a plist merged into the bundle — `<key>SIGNOZ_OTLP_INGESTION_KEY</key>`
+with `$${SIGNOZ_OTLP_INGESTION_KEY:-}` as its string value — Swift reads it from
+`Bundle.main.infoDictionary`, and passes it across FFI to `Destination::from_bundle`.
 
-The file is **never tracked** — not even as an empty placeholder. A tracked file cannot be
-gitignored, so the release script's write would show up as a modification, and one careless
-`git add -A` on a developer's machine would publish the ingestion key to a public repository.
-Instead the `rust_library` globs for it with `allow_empty = True`, so an absent file yields no env
-entries and `option_env!` yields `None`. The glob goes on `pessimal_usage_otlp`, which is where
-`option_env!` is evaluated — not on the FFI target. The `--config=ci` simulator build never writes
-it, which is the "test builds cannot phone home" guarantee.
+The credential never enters a Rust compile unit, so there is no build-time env plumbing, nothing to
+gitignore, and no tracked file that one `git add -A` could turn into a published key. `$${VAR:-}`
+expands to an empty string when unset, which `a_bundle_with_unset_values_yields_no_destination` pins
+as "no destination" rather than "a destination that fails every send" — so the `--config=ci`
+simulator build cannot phone home by construction.
+
+The agent keeps `option_env!` via `Destination::from_build`, because a daemon has no bundle to read a
+plist from. Same type, same validation, two routes in.
+
+The env var names are the Doppler secret names — `SIGNOZ_OTLP_ENDPOINT`,
+`SIGNOZ_OTLP_INGESTION_KEY` — rather than `PESSIMAL_`-prefixed, so the release script is a
+pass-through with no renaming step to get wrong.
+
+### What we deliberately do *not* copy from the siblings
+
+Their tracers send `device.id` as a stable per-install identifier, `user.id`, and
+`exception.message` / `status.message` from caught errors. For kumbaya and phil-connors those are
+their own users and their own errors. For Pessimal the equivalents are the *operator's*
+infrastructure — a backend error body names their collector, their hosts, their queries — so the
+allowlist keeps them out and the encoder emits no `status.message` at all. Same wire format, stricter
+payload.
+
+Their client tracing is also in Swift, which is right for them: their app logic is Swift, so that is
+where the spans are. Pessimal's client logic is Rust — `plan`, `gather`, `fold`, and the backend's
+HTTP status all happen below the FFI boundary — so a Swift tracer would see only the outermost call.
+Hence the encoder lives in Rust, where it is also shared with the agent. The wire format is
+independently corroborated: their `OTLPExporter.encodeSpan` and our `encode::encode_span` agree on
+every detail that matters, having been written from the spec separately.
+
+Their batching is worth copying outright: a buffer of 20 spans with a 5-second debounce, flushed
+early when full, fire-and-forget. That lands in the FFI session rather than in the sink.
 
 ## Verification ladder
 
@@ -248,9 +283,10 @@ it, which is the "test builds cannot phone home" guarantee.
 
 ## Phases
 
-**Phase 1 — client.** Spike, then `common/pessimal_usage` + `common/pessimal_usage_otlp`, session
-instrumentation, FFI records, Swift consent + UI + privacy manifest, key injection in the Buildkite
-iOS release step. Ends with a span from TestFlight in our SigNoz.
+**Phase 1 — client.** Spike and the two crates are done. Remaining: session instrumentation and
+batching, FFI records, Swift consent + UI + privacy manifest, and the `--action_env` → `genrule` →
+plist → `infoDictionary` → FFI chain in the Buildkite iOS release step. Ends with a span from
+TestFlight visible in our SigNoz.
 
 **Phase 2 — agent.** `[usage_reporting]` config, `DO_NOT_TRACK` / `CI`, agent-side spans (startup,
 export cycle outcome, collection failure kind). Blocked on an agent release path existing, since

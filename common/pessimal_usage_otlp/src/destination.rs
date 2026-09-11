@@ -1,32 +1,42 @@
 //! Where usage reports go, and where that comes from.
 //!
-//! The destination is *baked into the build*, never configured at runtime. That is what makes the
-//! "test builds cannot phone home" guarantee structural: a `cargo build` from source, and the CI
-//! simulator build, are given no endpoint and so have nowhere to report. The alternative — a runtime
-//! default compiled in as a literal — would put the credential in a public repository.
+//! Two routes in, one type out, matching how the sibling projects already do this rather than
+//! inventing a third way:
 //!
-//! The values arrive through `option_env!`, fed by a `rustc_env_files` entry under Bazel and by the
-//! environment under Cargo. Verified against `rules_rust`: an absent name is `None`, an **empty** env
-//! file is also `None` rather than `Some("")`, and changing a value invalidates the cached action so
-//! a keyless build cannot be reused. `rustc_env_files` rather than `--define` on purpose, because a
-//! `--define` value is visible in `ps` and in whatever the CI step echoes.
+//! **The clients** get it over FFI. The release build passes `--action_env=SIGNOZ_OTLP_ENDPOINT=…`
+//! and `--action_env=SIGNOZ_OTLP_INGESTION_KEY=…`, a `genrule` expands those into a plist merged
+//! into the bundle, and Swift reads them from `Bundle.main.infoDictionary` and hands them across.
+//! That is kumbaya's and phil-connors' mechanism verbatim; both ship it, and it keeps the credential
+//! out of Rust compile units entirely — no build-time env plumbing, nothing to gitignore, no risk of
+//! a key reaching a public repository through a tracked file.
+//!
+//! **The agent** gets it from [`Destination::from_build`], which reads `option_env!`, because a
+//! binary has no bundle to read a plist from. A plain `cargo build` sets neither, so it has nowhere
+//! to report.
+//!
+//! Either way the "test builds cannot phone home" guarantee is structural rather than a runtime
+//! check: a `genrule` with an unset variable expands to an empty string, `option_env!` yields `None`,
+//! and [`Destination::new`] treats both as no destination at all.
 
 use std::fmt;
 
-/// Build-time name for the OTLP/HTTP base URL, e.g. `https://ingest.eu.signoz.cloud:443`.
-pub const ENDPOINT_VAR: &str = "PESSIMAL_USAGE_OTLP_ENDPOINT";
-/// Build-time name for the header the credential travels in.
+/// The env var carrying the OTLP/HTTP base URL, e.g. `https://ingest.eu2.signoz.cloud`.
 ///
-/// A name rather than a hardcoded constant because the right one is backend- and tier-specific —
-/// SigNoz Cloud wants `signoz-ingestion-key`, a self-hosted install `signoz-access-token` — and
-/// getting it wrong is a silent non-delivery. Better configured once at release time than guessed in
-/// source.
-pub const HEADER_NAME_VAR: &str = "PESSIMAL_USAGE_OTLP_HEADER";
-/// Build-time name for the credential itself.
-pub const KEY_VAR: &str = "PESSIMAL_USAGE_OTLP_KEY";
+/// Named for the Doppler secret in `prd_ios_deployment` rather than prefixed `PESSIMAL_`, so the
+/// release script is a pass-through and there is no renaming step to get wrong.
+pub const ENDPOINT_VAR: &str = "SIGNOZ_OTLP_ENDPOINT";
+/// The env var carrying the ingestion credential.
+pub const KEY_VAR: &str = "SIGNOZ_OTLP_INGESTION_KEY";
 
-/// The default header, used when a build supplies an endpoint and key but no header name.
-const DEFAULT_HEADER: &str = "signoz-ingestion-key";
+/// The header SigNoz wants an ingestion key in.
+///
+/// Not a build-time variable: both sibling projects hardcode this exact string, in their Rust
+/// servers and their Swift clients, and they are in production against the same SigNoz. Note it is
+/// *not* the `signoz-access-token` that `pessimal_agent_core`'s preset sends — that one is for the
+/// operator's own collector, which is a different endpoint with a different credential.
+///
+/// A self-hosted deployment that needs something else can still pass it to [`Destination::new`].
+pub const INGESTION_KEY_HEADER: &str = "signoz-ingestion-key";
 
 /// A credential that does not appear in logs.
 ///
@@ -78,7 +88,10 @@ impl fmt::Debug for Destination {
 }
 
 impl Destination {
-    /// The destination this binary was built with, or `None` if it was built without one.
+    /// The destination this *binary* was built with, or `None` if it was built without one.
+    ///
+    /// For the agent. The clients take the same values from their bundle's plist and pass them to
+    /// [`Destination::new`] across FFI instead — an app has a bundle to read, a daemon does not.
     ///
     /// `None` is the expected answer for every build except an official release, and
     /// `pessimal_usage::Consent` turns it into `DenialReason::NoDestination` rather than an error:
@@ -86,10 +99,20 @@ impl Destination {
     #[must_use]
     pub fn from_build() -> Option<Self> {
         Self::new(
-            option_env!("PESSIMAL_USAGE_OTLP_ENDPOINT")?,
-            option_env!("PESSIMAL_USAGE_OTLP_HEADER").unwrap_or(DEFAULT_HEADER),
-            option_env!("PESSIMAL_USAGE_OTLP_KEY")?,
+            option_env!("SIGNOZ_OTLP_ENDPOINT")?,
+            INGESTION_KEY_HEADER,
+            option_env!("SIGNOZ_OTLP_INGESTION_KEY")?,
         )
+    }
+
+    /// A destination from the values an app found in its bundle.
+    ///
+    /// The convenience the FFI layer actually calls: it has two strings from `infoDictionary`, both
+    /// possibly empty because the `genrule` expands an unset variable to `""`, and it wants either a
+    /// destination or a clean `None`.
+    #[must_use]
+    pub fn from_bundle(endpoint: &str, key: &str) -> Option<Self> {
+        Self::new(endpoint, INGESTION_KEY_HEADER, key)
     }
 
     /// Validates the three parts. `None` if any is unusable.
@@ -246,6 +269,35 @@ mod tests {
         assert!(rendered.contains("<redacted>"));
         // The endpoint is not a secret and is worth seeing when diagnosing.
         assert!(rendered.contains("ingest.example.com"));
+    }
+
+    #[test]
+    fn a_bundle_with_unset_values_yields_no_destination() {
+        // The `genrule` expands an unset `--action_env` to an empty string, so this is the exact
+        // shape a simulator or local build produces. It must be "no destination", not a destination
+        // that fails every send.
+        assert!(Destination::from_bundle("", "").is_none());
+        assert!(Destination::from_bundle("https://ingest.eu2.signoz.cloud", "").is_none());
+        assert!(Destination::from_bundle("", "key").is_none());
+    }
+
+    #[test]
+    fn a_bundle_with_both_values_reports_to_signozs_ingestion_header() {
+        let destination = Destination::from_bundle("https://ingest.eu2.signoz.cloud", "key")
+            .expect("both values present");
+        assert_eq!(destination.header_name(), "signoz-ingestion-key");
+        assert_eq!(
+            destination.traces_url(),
+            "https://ingest.eu2.signoz.cloud/v1/traces"
+        );
+    }
+
+    #[test]
+    fn the_ingestion_header_is_not_the_operators_access_token() {
+        // `pessimal_agent_core`'s SigNoz preset sends `signoz-access-token` to the *operator's*
+        // collector. Confusing the two is a silent non-delivery, so the distinction is asserted.
+        assert_ne!(INGESTION_KEY_HEADER, "signoz-access-token");
+        assert_eq!(INGESTION_KEY_HEADER, "signoz-ingestion-key");
     }
 
     #[test]

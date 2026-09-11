@@ -219,12 +219,16 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
    other way to tell.
 5. Use `std::env::vars_os()` filtered to valid UTF-8 for the consent map. `vars()` panics on a
    non-UTF-8 environment.
-6. `rustc_env_files = glob(["usage-destination.env"], allow_empty = True)` on the
-   `pessimal_usage_otlp` `rust_library` — the crate where `option_env!` is evaluated, not the FFI
-   target. The file is **never tracked**: a tracked placeholder cannot be gitignored, and one
-   `git add -A` would publish the key. Check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under
-   rules_rust, since no BUILD file here passes `version` — the scope version would then differ
-   between Cargo and Bazel.
+6. Inject the credential **the way kumbaya and phil-connors already do**, not a third way:
+   `--action_env=SIGNOZ_OTLP_ENDPOINT=…` / `--action_env=SIGNOZ_OTLP_INGESTION_KEY=…` from the
+   release lane (guarded, so a local build passes no flag), a `genrule` expanding `$${VAR:-}` into a
+   plist merged into the bundle, Swift reading `Bundle.main.infoDictionary`, and
+   `Destination::from_bundle` across FFI. The header is `signoz-ingestion-key` — confirmed in four
+   places across both siblings, and *not* the `signoz-access-token` the agent preset sends to the
+   operator's collector. Their batching is worth copying too: 20 spans with a 5-second debounce,
+   flushed early when full.
+   Also check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under rules_rust, since no BUILD file
+   here passes `version` — the scope version would then differ between Cargo and Bazel.
 7. Fix `FleetStoreBridge` persisting 3 of its 6 fields *before* adding fields to it.
 
 Then additional query backends (Honeycomb, ClickStack), or the open items below.
