@@ -17,6 +17,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 pessimal_client_core = { workspace = true }
 pessimal_core = { workspace = true }
 pessimal_query_signoz = { workspace = true }
+pessimal_usage = { workspace = true }
+pessimal_usage_otlp = { workspace = true }
+uuid = { workspace = true }
 chrono = { workspace = true }
 # The `tokio` feature is what makes `#[uniffi::export(async_runtime = "tokio")]` available. It is
 # needed because reqwest wants a tokio reactor — nothing in pessimal_client_core does.
@@ -38,6 +41,10 @@ serde_json = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 chrono = { workspace = true }
+tokio = { workspace = true }
+# The `testing` feature exists for exactly this — its own comment says so. A dev-dependency, so the
+# doubles are not in the shipped staticlib.
+pessimal_client_core = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

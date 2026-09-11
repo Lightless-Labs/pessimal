@@ -67,6 +67,7 @@ pub mod convert;
 pub mod fold_records;
 pub mod probe_records;
 pub mod session;
+pub mod usage;
 pub mod view_records;
 
 pub use config_records::*;

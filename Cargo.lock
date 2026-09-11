@@ -1404,12 +1404,15 @@ dependencies = [
  "pessimal_client_core",
  "pessimal_core",
  "pessimal_query_signoz",
+ "pessimal_usage",
+ "pessimal_usage_otlp",
  "reqwest",
  "rustls",
  "serde_json",
  "thiserror",
  "tokio",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]

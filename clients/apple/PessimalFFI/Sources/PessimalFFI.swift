@@ -481,6 +481,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
@@ -622,6 +638,15 @@ public protocol FleetSessionProtocol: AnyObject, Sendable {
      * [`FfiError::Backend`] if the state cannot be serialised, carrying core's message.
      */
     func exportState() throws  -> String
+    
+    /**
+     * Sends anything buffered, now.
+     *
+     * Awaited by Swift's `.background` handler inside a `beginBackgroundTask`, which is the one
+     * moment where waiting is right: the alternative is losing the batch when the process is
+     * suspended. Returns nothing, because there is nothing the app would do differently either way.
+     */
+    func flushUsage() async 
     
     /**
      * Drops a host, its series, and its evaluations — an operator decommissioning a machine.
@@ -767,6 +792,16 @@ public protocol FleetSessionProtocol: AnyObject, Sendable {
     func setConfig(config: FleetConfigRecord) async throws  -> [TuningWarningRecord]
     
     /**
+     * What usage reporting has managed to do, or why it is not doing it.
+     *
+     * Synchronous so a settings screen can render it directly. Reports the denial reason when
+     * reporting is off, because "off" without "why" is the version of this screen that generates
+     * support questions: a user who switched it back on and still sees nothing needs to be told that
+     * `DO_NOT_TRACK` or `CI` is the switch actually in effect.
+     */
+    func usageDiagnostics()  -> UsageDiagnosticsRecord
+    
+    /**
      * The fleet as it currently stands, projected from the state this session holds.
      *
      * Synchronous and infallible so a `SwiftUI` body can call it directly: a view that has to
@@ -868,6 +903,12 @@ open class FleetSession: FleetSessionProtocol, @unchecked Sendable {
      * `cached_state_json` is the string a previous session's [`FleetSession::export_state`]
      * produced. A bad one is not an error: see [`FleetSession::restore_report`].
      *
+     * `usage` carries the usage-reporting destination from the bundle plus the user's opt-out. It is
+     * read *here*, before anything can poll, and a reporter is built only if consent allows one —
+     * see [`crate::usage::UsageReporter::build`]. Passing `None`, or a record with an empty
+     * endpoint or key, means this build reports nothing, which is what every build except an
+     * official release should do.
+     *
      * # Errors
      * [`FfiError::InvalidConfig`] if the environment is empty or contains `::`;
      * [`FfiError::InvalidTuning`] if the tuning fails one of core's interlocks;
@@ -875,7 +916,7 @@ open class FleetSession: FleetSessionProtocol, @unchecked Sendable {
      * [`FfiError::Backend`] if the base URL has no scheme, the API key is blank, or the HTTP
      * client cannot be built.
      */
-public convenience init(baseUrl: String, apiKey: String, config: FleetConfigRecord, cachedStateJson: String?)throws  {
+public convenience init(baseUrl: String, apiKey: String, config: FleetConfigRecord, cachedStateJson: String?, usage: UsageReportingRecord?)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeFfiError_lift) {
         uniffiCallStatus in
@@ -883,7 +924,8 @@ public convenience init(baseUrl: String, apiKey: String, config: FleetConfigReco
         FfiConverterString.lower(baseUrl),
         FfiConverterString.lower(apiKey),
         FfiConverterTypeFleetConfigRecord_lower(config),
-        FfiConverterOptionString.lower(cachedStateJson),uniffiCallStatus
+        FfiConverterOptionString.lower(cachedStateJson),
+        FfiConverterOptionTypeUsageReportingRecord.lower(usage),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -924,6 +966,30 @@ open func exportState()throws  -> String  {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * Sends anything buffered, now.
+     *
+     * Awaited by Swift's `.background` handler inside a `beginBackgroundTask`, which is the one
+     * moment where waiting is right: the alternative is losing the batch when the process is
+     * suspended. Returns nothing, because there is nothing the app would do differently either way.
+     */
+open func flushUsage()async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_pessimal_ffi_fn_method_fleetsession_flush_usage(
+                        self.uniffiCloneHandle()
+                )
+            },
+            pollFunc: ffi_pessimal_ffi_rust_future_poll_void,
+            completeFunc: ffi_pessimal_ffi_rust_future_complete_void,
+            freeFunc: ffi_pessimal_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+            
+        )
 }
     
     /**
@@ -1138,6 +1204,23 @@ open func setConfig(config: FleetConfigRecord)async throws  -> [TuningWarningRec
             liftFunc: FfiConverterSequenceTypeTuningWarningRecord.lift,
             errorHandler: FfiConverterTypeFfiError_lift
         )
+}
+    
+    /**
+     * What usage reporting has managed to do, or why it is not doing it.
+     *
+     * Synchronous so a settings screen can render it directly. Reports the denial reason when
+     * reporting is off, because "off" without "why" is the version of this screen that generates
+     * support questions: a user who switched it back on and still sees nothing needs to be told that
+     * `DO_NOT_TRACK` or `CI` is the switch actually in effect.
+     */
+open func usageDiagnostics() -> UsageDiagnosticsRecord  {
+    return try!  FfiConverterTypeUsageDiagnosticsRecord_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_pessimal_ffi_fn_method_fleetsession_usage_diagnostics(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
     /**
@@ -3319,6 +3402,246 @@ public func FfiConverterTypeRestoreReportRecord_lower(_ value: RestoreReportReco
 
 
 /**
+ * Counters a settings screen can show, plus why reporting is off if it is.
+ */
+public struct UsageDiagnosticsRecord: Equatable, Hashable {
+    public let enabled: Bool
+    public let denial: UsageDenialReasonRecord?
+    /**
+     * Reports the backend accepted.
+     */
+    public let sent: UInt64
+    /**
+     * Reports the backend refused — a bad credential, a rejected shape.
+     */
+    public let rejected: UInt64
+    /**
+     * Reports that got no answer at all.
+     */
+    public let failed: UInt64
+    /**
+     * Spans in accepted reports.
+     */
+    public let spansReported: UInt64
+    /**
+     * Traces waiting for the next flush.
+     */
+    public let buffered: UInt64
+    /**
+     * Traces discarded because the buffer was full. Non-zero means flushes have been failing.
+     */
+    public let dropped: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, denial: UsageDenialReasonRecord?, 
+        /**
+         * Reports the backend accepted.
+         */sent: UInt64, 
+        /**
+         * Reports the backend refused — a bad credential, a rejected shape.
+         */rejected: UInt64, 
+        /**
+         * Reports that got no answer at all.
+         */failed: UInt64, 
+        /**
+         * Spans in accepted reports.
+         */spansReported: UInt64, 
+        /**
+         * Traces waiting for the next flush.
+         */buffered: UInt64, 
+        /**
+         * Traces discarded because the buffer was full. Non-zero means flushes have been failing.
+         */dropped: UInt64) {
+        self.enabled = enabled
+        self.denial = denial
+        self.sent = sent
+        self.rejected = rejected
+        self.failed = failed
+        self.spansReported = spansReported
+        self.buffered = buffered
+        self.dropped = dropped
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension UsageDiagnosticsRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUsageDiagnosticsRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UsageDiagnosticsRecord {
+        return
+            try UsageDiagnosticsRecord(
+                enabled: FfiConverterBool.read(from: &buf), 
+                denial: FfiConverterOptionTypeUsageDenialReasonRecord.read(from: &buf), 
+                sent: FfiConverterUInt64.read(from: &buf), 
+                rejected: FfiConverterUInt64.read(from: &buf), 
+                failed: FfiConverterUInt64.read(from: &buf), 
+                spansReported: FfiConverterUInt64.read(from: &buf), 
+                buffered: FfiConverterUInt64.read(from: &buf), 
+                dropped: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UsageDiagnosticsRecord, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterOptionTypeUsageDenialReasonRecord.write(value.denial, into: &buf)
+        FfiConverterUInt64.write(value.sent, into: &buf)
+        FfiConverterUInt64.write(value.rejected, into: &buf)
+        FfiConverterUInt64.write(value.failed, into: &buf)
+        FfiConverterUInt64.write(value.spansReported, into: &buf)
+        FfiConverterUInt64.write(value.buffered, into: &buf)
+        FfiConverterUInt64.write(value.dropped, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDiagnosticsRecord_lift(_ buf: RustBuffer) throws -> UsageDiagnosticsRecord {
+    return try FfiConverterTypeUsageDiagnosticsRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDiagnosticsRecord_lower(_ value: UsageDiagnosticsRecord) -> RustBuffer {
+    return FfiConverterTypeUsageDiagnosticsRecord.lower(value)
+}
+
+
+/**
+ * What the app passes in so a reporter can be built — or, just as validly, not built.
+ *
+ * `endpoint` and `ingestion_key` come from the bundle's plist, which a `genrule` fills from
+ * `--action_env` at release time and leaves empty otherwise. Empty is not an error: it is a build
+ * that cannot report, which is what a simulator build should be.
+ *
+ * Note what is *not* here: any identifier. The instance id is minted in Rust — see [`instance_id`].
+ */
+public struct UsageReportingRecord: Equatable, Hashable {
+    /**
+     * OTLP/HTTP base URL, no signal path. Empty when this build was given none.
+     */
+    public let endpoint: String
+    /**
+     * SigNoz ingestion key. Empty when this build was given none.
+     */
+    public let ingestionKey: String
+    /**
+     * The user's switch. `true` means do not report.
+     */
+    public let optedOut: Bool
+    public let platform: UsagePlatformRecord
+    public let deviceClass: UsageDeviceClassRecord
+    /**
+     * `CFBundleShortVersionString`. Dropped unless it parses as a dotted numeric version.
+     */
+    public let appVersion: String
+    /**
+     * `CFBundleVersion`, where it is an integer.
+     */
+    public let appBuild: UInt32?
+    /**
+     * The OS version. Trimmed to major and minor, and dropped unless numeric.
+     */
+    public let osVersion: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * OTLP/HTTP base URL, no signal path. Empty when this build was given none.
+         */endpoint: String, 
+        /**
+         * SigNoz ingestion key. Empty when this build was given none.
+         */ingestionKey: String, 
+        /**
+         * The user's switch. `true` means do not report.
+         */optedOut: Bool, platform: UsagePlatformRecord, deviceClass: UsageDeviceClassRecord, 
+        /**
+         * `CFBundleShortVersionString`. Dropped unless it parses as a dotted numeric version.
+         */appVersion: String, 
+        /**
+         * `CFBundleVersion`, where it is an integer.
+         */appBuild: UInt32?, 
+        /**
+         * The OS version. Trimmed to major and minor, and dropped unless numeric.
+         */osVersion: String) {
+        self.endpoint = endpoint
+        self.ingestionKey = ingestionKey
+        self.optedOut = optedOut
+        self.platform = platform
+        self.deviceClass = deviceClass
+        self.appVersion = appVersion
+        self.appBuild = appBuild
+        self.osVersion = osVersion
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension UsageReportingRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUsageReportingRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UsageReportingRecord {
+        return
+            try UsageReportingRecord(
+                endpoint: FfiConverterString.read(from: &buf), 
+                ingestionKey: FfiConverterString.read(from: &buf), 
+                optedOut: FfiConverterBool.read(from: &buf), 
+                platform: FfiConverterTypeUsagePlatformRecord.read(from: &buf), 
+                deviceClass: FfiConverterTypeUsageDeviceClassRecord.read(from: &buf), 
+                appVersion: FfiConverterString.read(from: &buf), 
+                appBuild: FfiConverterOptionUInt32.read(from: &buf), 
+                osVersion: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UsageReportingRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.endpoint, into: &buf)
+        FfiConverterString.write(value.ingestionKey, into: &buf)
+        FfiConverterBool.write(value.optedOut, into: &buf)
+        FfiConverterTypeUsagePlatformRecord.write(value.platform, into: &buf)
+        FfiConverterTypeUsageDeviceClassRecord.write(value.deviceClass, into: &buf)
+        FfiConverterString.write(value.appVersion, into: &buf)
+        FfiConverterOptionUInt32.write(value.appBuild, into: &buf)
+        FfiConverterString.write(value.osVersion, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageReportingRecord_lift(_ buf: RustBuffer) throws -> UsageReportingRecord {
+    return try FfiConverterTypeUsageReportingRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageReportingRecord_lower(_ value: UsageReportingRecord) -> RustBuffer {
+    return FfiConverterTypeUsageReportingRecord.lower(value)
+}
+
+
+/**
  * Whether the phase was judged on this poll's data, or is being held.
  *
  * `Frozen { since_millis }` is what lets a row read "held since 12:04" instead of presenting a
@@ -5378,6 +5701,295 @@ public func FfiConverterTypeTuningWarningRecord_lower(_ value: TuningWarningReco
 }
 
 
+
+/**
+ * Why reporting is off.
+ *
+ * Crosses the boundary so a settings screen can say *which* switch is in effect. A user who turned
+ * reporting off, turned it back on, and still sees it off because `CI=true` is set has no other way
+ * to find out.
+ */
+
+public enum UsageDenialReasonRecord: Equatable, Hashable {
+    
+    /**
+     * The user's own switch, or `PESSIMAL_USAGE_REPORTING=off`.
+     */
+    case optedOut
+    /**
+     * `DO_NOT_TRACK` is set.
+     */
+    case doNotTrack
+    /**
+     * Running under CI.
+     */
+    case continuousIntegration
+    /**
+     * This build carries no destination — every build except an official release.
+     */
+    case noDestination
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension UsageDenialReasonRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUsageDenialReasonRecord: FfiConverterRustBuffer {
+    typealias SwiftType = UsageDenialReasonRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UsageDenialReasonRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .optedOut
+        
+        case 2: return .doNotTrack
+        
+        case 3: return .continuousIntegration
+        
+        case 4: return .noDestination
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UsageDenialReasonRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .optedOut:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .doNotTrack:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .continuousIntegration:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .noDestination:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDenialReasonRecord_lift(_ buf: RustBuffer) throws -> UsageDenialReasonRecord {
+    return try FfiConverterTypeUsageDenialReasonRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDenialReasonRecord_lower(_ value: UsageDenialReasonRecord) -> RustBuffer {
+    return FfiConverterTypeUsageDenialReasonRecord.lower(value)
+}
+
+
+
+/**
+ * Coarse device shape.
+ */
+
+public enum UsageDeviceClassRecord: Equatable, Hashable {
+    
+    case phone
+    case tablet
+    case mac
+    case server
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension UsageDeviceClassRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUsageDeviceClassRecord: FfiConverterRustBuffer {
+    typealias SwiftType = UsageDeviceClassRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UsageDeviceClassRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .phone
+        
+        case 2: return .tablet
+        
+        case 3: return .mac
+        
+        case 4: return .server
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UsageDeviceClassRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .phone:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .tablet:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .mac:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .server:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDeviceClassRecord_lift(_ buf: RustBuffer) throws -> UsageDeviceClassRecord {
+    return try FfiConverterTypeUsageDeviceClassRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsageDeviceClassRecord_lower(_ value: UsageDeviceClassRecord) -> RustBuffer {
+    return FfiConverterTypeUsageDeviceClassRecord.lower(value)
+}
+
+
+
+/**
+ * Which platform the client is running on.
+ */
+
+public enum UsagePlatformRecord: Equatable, Hashable {
+    
+    case ios
+    case macos
+    case linux
+    case windows
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension UsagePlatformRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUsagePlatformRecord: FfiConverterRustBuffer {
+    typealias SwiftType = UsagePlatformRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UsagePlatformRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ios
+        
+        case 2: return .macos
+        
+        case 3: return .linux
+        
+        case 4: return .windows
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UsagePlatformRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .ios:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .macos:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .linux:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .windows:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsagePlatformRecord_lift(_ buf: RustBuffer) throws -> UsagePlatformRecord {
+    return try FfiConverterTypeUsagePlatformRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUsagePlatformRecord_lower(_ value: UsagePlatformRecord) -> RustBuffer {
+    return FfiConverterTypeUsagePlatformRecord.lower(value)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -5541,6 +6153,54 @@ fileprivate struct FfiConverterOptionTypeRestoreReportRecord: FfiConverterRustBu
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeRestoreReportRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeUsageReportingRecord: FfiConverterRustBuffer {
+    typealias SwiftType = UsageReportingRecord?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeUsageReportingRecord.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeUsageReportingRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeUsageDenialReasonRecord: FfiConverterRustBuffer {
+    typealias SwiftType = UsageDenialReasonRecord?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeUsageDenialReasonRecord.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeUsageDenialReasonRecord.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -6109,6 +6769,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_pessimal_ffi_checksum_method_fleetsession_export_state() != 53635) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_pessimal_ffi_checksum_method_fleetsession_flush_usage() != 44061) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_pessimal_ffi_checksum_method_fleetsession_forget_host() != 16425) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6127,10 +6790,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_pessimal_ffi_checksum_method_fleetsession_set_config() != 33871) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_pessimal_ffi_checksum_method_fleetsession_usage_diagnostics() != 24853) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_pessimal_ffi_checksum_method_fleetsession_view() != 7220) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_pessimal_ffi_checksum_constructor_fleetsession_new() != 23880) {
+    if (uniffi_pessimal_ffi_checksum_constructor_fleetsession_new() != 65383) {
         return InitializationResult.apiChecksumMismatch
     }
 

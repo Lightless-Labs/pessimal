@@ -1,0 +1,17 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+# The transport for Pessimal's usage spans. Linked into the iOS staticlib, which is why its manifest
+# picks reqwest's `rustls-no-provider` and why `lib.rs` installs the `ring` provider itself.
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "pessimal_usage_otlp",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"],
+    crate_name = "pessimal_usage_otlp",
+    edition = "2024",
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True) + ["//common/pessimal_usage"],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)

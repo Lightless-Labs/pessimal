@@ -8,6 +8,8 @@ exports_files(["Cargo.toml"])
 
 _DEPS = all_crate_deps(normal = True) + [
     "//common/pessimal_core",
+    "//common/pessimal_usage",
+    "//common/pessimal_usage_otlp",
     "//clients/common/pessimal_client_core",
     "//clients/common/query/pessimal_query_signoz",
 ]

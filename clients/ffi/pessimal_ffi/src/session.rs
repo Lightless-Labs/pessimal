@@ -17,6 +17,8 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration as StdDuration;
 
+use chrono::{DateTime, Utc};
+use pessimal_client_core::view::FleetView;
 use pessimal_client_core::{FleetConfig, FleetState, FleetUpdate, poll_once, probe_backend};
 use pessimal_core::TelemetryQuery;
 use pessimal_query_signoz::{SignozConfig, SignozQuery};
@@ -28,6 +30,10 @@ use crate::fold_records::{
     PollAdviceRecord, PollResult, RestoreReportRecord, transitions_to_records,
 };
 use crate::probe_records::BackendProbeRecord;
+use crate::usage::{
+    UsageDenialReasonRecord, UsageDiagnosticsRecord, UsageReporter, UsageReportingRecord,
+    backend_kind_from_name, poll_trace,
+};
 use crate::view_records::{FleetViewRecord, FreshnessRecord};
 
 /// How long a TCP connect may take before the query is abandoned.
@@ -66,6 +72,11 @@ pub struct FleetSession {
     /// [`FleetSession::poll`].
     in_flight: tokio::sync::Mutex<()>,
     restore: Option<RestoreReportRecord>,
+    /// `None` when consent or the build said no. There is deliberately no disabled reporter: a
+    /// reporter that exists is one that reports, so the check cannot be forgotten at a call site.
+    usage: Option<Arc<UsageReporter>>,
+    /// Why `usage` is `None`, for the settings screen. Set together with it and never after.
+    usage_denial: Option<UsageDenialReasonRecord>,
 }
 
 /// Recovers a `std::sync::Mutex` from poisoning instead of panicking or returning an error.
@@ -81,7 +92,7 @@ pub struct FleetSession {
 /// force [`FleetSession::view`] and [`FleetSession::restore_report`] to be throwing, which is the
 /// one thing a `SwiftUI` body cannot easily call — and it would make the app handle an error it can
 /// do nothing about.
-fn recover<'guard, T>(
+pub(crate) fn recover<'guard, T>(
     result: Result<MutexGuard<'guard, T>, PoisonError<MutexGuard<'guard, T>>>,
 ) -> MutexGuard<'guard, T> {
     result.unwrap_or_else(PoisonError::into_inner)
@@ -100,6 +111,7 @@ impl FleetSession {
         query: Arc<dyn TelemetryQuery>,
         config: FleetConfig,
         cached_state_json: Option<&str>,
+        usage: Option<&UsageReportingRecord>,
     ) -> Self {
         let backend_name = query.backend_name().to_owned();
         // `FleetState::restore` never returns `Err`: a monitoring app must not refuse to launch
@@ -116,12 +128,53 @@ impl FleetSession {
             None => (FleetState::new(backend_name), None),
         };
 
+        // Built here, before any poll can run, because that is what makes consent structural: the
+        // object either exists or it does not, and nothing downstream is in a position to override
+        // the decision. A session given no record at all is a session with nowhere to report.
+        let (reporter, usage_denial) = match usage {
+            Some(record) => UsageReporter::build(record),
+            None => (None, Some(UsageDenialReasonRecord::NoDestination)),
+        };
+
         Self {
             state: Mutex::new(state),
             config: Mutex::new(config),
             query,
             in_flight: tokio::sync::Mutex::new(()),
             restore,
+            usage: reporter.map(Arc::new),
+            usage_denial,
+        }
+    }
+
+    /// Buffers this poll's span, and spawns a flush if that filled a batch.
+    ///
+    /// Synchronous and infallible by construction: there is nothing here a caller could handle, and a
+    /// poll whose reporting failed is still a successful poll. The spawn is what keeps the export off
+    /// the poll's critical path — `tokio::spawn` rather than `await`, so a ten-second timeout against
+    /// an unreachable ingest endpoint costs the user nothing.
+    fn report_poll(
+        &self,
+        view: &FleetView,
+        config: &FleetConfig,
+        started: DateTime<Utc>,
+        ended: DateTime<Utc>,
+    ) {
+        let Some(reporter) = self.usage.as_ref() else {
+            return;
+        };
+        let trace = poll_trace(
+            view,
+            u32::try_from(config.rules.len()).unwrap_or(u32::MAX),
+            backend_kind_from_name(&view.backend_name),
+            started,
+            ended,
+        );
+        if reporter.record(trace) {
+            let reporter = Arc::clone(reporter);
+            // Detached on purpose. Nothing joins it: the result is a diagnostics counter, and the
+            // task outliving this call is the point.
+            tokio::spawn(async move { reporter.flush().await });
         }
     }
 
@@ -172,6 +225,12 @@ impl FleetSession {
     /// `cached_state_json` is the string a previous session's [`FleetSession::export_state`]
     /// produced. A bad one is not an error: see [`FleetSession::restore_report`].
     ///
+    /// `usage` carries the usage-reporting destination from the bundle plus the user's opt-out. It is
+    /// read *here*, before anything can poll, and a reporter is built only if consent allows one —
+    /// see [`crate::usage::UsageReporter::build`]. Passing `None`, or a record with an empty
+    /// endpoint or key, means this build reports nothing, which is what every build except an
+    /// official release should do.
+    ///
     /// # Errors
     /// [`FfiError::InvalidConfig`] if the environment is empty or contains `::`;
     /// [`FfiError::InvalidTuning`] if the tuning fails one of core's interlocks;
@@ -188,6 +247,7 @@ impl FleetSession {
         api_key: String,
         config: FleetConfigRecord,
         cached_state_json: Option<String>,
+        usage: Option<UsageReportingRecord>,
     ) -> Result<Arc<Self>, FfiError> {
         let config = FleetConfig::try_from(config)?;
 
@@ -219,6 +279,7 @@ impl FleetSession {
             Arc::new(query),
             config,
             cached_state_json.as_deref(),
+            usage.as_ref(),
         )))
     }
 
@@ -282,6 +343,7 @@ impl FleetSession {
             .map_err(|error| FfiError::Internal {
                 message: error.to_string(),
             })?;
+        let finished_at = Utc::now();
 
         // Exhaustive destructure, no `..`: `state` goes back into the mutex and must not be the
         // field a future addition to `FleetUpdate` quietly displaces.
@@ -296,11 +358,42 @@ impl FleetSession {
         // landed between the clone above and this write.
         *recover(self.state.lock()) = next;
 
+        // Usage reporting, strictly after the poll's own work is done and strictly without awaiting
+        // it. A report that cannot be sent must not delay, fail, or alter a poll — so the flush is
+        // spawned, and `record` only buffers. The view below is the one this poll produced, so the
+        // outcome it reports is this poll's and not a stale one.
+        self.report_poll(&view, &config, now, finished_at);
+
         Ok(PollResult::folded(
             FleetViewRecord::from(view),
             transitions_to_records(&transitions),
             PollAdviceRecord::from(advice),
         ))
+    }
+
+    /// Sends anything buffered, now.
+    ///
+    /// Awaited by Swift's `.background` handler inside a `beginBackgroundTask`, which is the one
+    /// moment where waiting is right: the alternative is losing the batch when the process is
+    /// suspended. Returns nothing, because there is nothing the app would do differently either way.
+    pub async fn flush_usage(&self) {
+        if let Some(reporter) = self.usage.as_ref() {
+            reporter.flush().await;
+        }
+    }
+
+    /// What usage reporting has managed to do, or why it is not doing it.
+    ///
+    /// Synchronous so a settings screen can render it directly. Reports the denial reason when
+    /// reporting is off, because "off" without "why" is the version of this screen that generates
+    /// support questions: a user who switched it back on and still sees nothing needs to be told that
+    /// `DO_NOT_TRACK` or `CI` is the switch actually in effect.
+    #[must_use]
+    pub fn usage_diagnostics(&self) -> UsageDiagnosticsRecord {
+        match self.usage.as_ref() {
+            Some(reporter) => reporter.diagnostics(),
+            None => UsageDiagnosticsRecord::disabled(self.usage_denial),
+        }
     }
 
     /// The fleet as it currently stands, projected from the state this session holds.
@@ -607,6 +700,9 @@ mod tests {
             "a-key".to_owned(),
             record(&config()),
             cached_state_json.map(str::to_owned),
+            // No usage reporting in a test session. A test that reported would be trying to reach a
+            // real ingest endpoint from a unit test.
+            None,
         )
         .expect("a parseable URL, a non-blank key, and a config core accepts")
     }
@@ -621,7 +717,12 @@ mod tests {
             release: Arc::clone(&release),
             roster_calls: AtomicUsize::new(0),
         };
-        let session = Arc::new(FleetSession::assemble(Arc::new(query), config(), None));
+        let session = Arc::new(FleetSession::assemble(
+            Arc::new(query),
+            config(),
+            None,
+            None,
+        ));
         (session, entered, release)
     }
 
