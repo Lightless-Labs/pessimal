@@ -55,8 +55,12 @@
 - **M7 iOS release — done, and now continuous.** Build `0.1.0.26` reached TestFlight on 2026-09-11
   from the mini and was processed by App Store Connect. **Every push to main that passes the three
   verification steps now ships to TestFlight** — no tag, no block step. `[skip release]` in the commit
-  message opts a push out; a commit marker rather than a path filter, because a path filter that is
-  wrong stops shipping silently.
+  message opts a push out — on the **subject line** only, since the marker's first outing put it in a
+  body and gated every release on it; a commit marker rather than a path filter, because a path filter
+  that is wrong stops shipping silently. Confirmed working on build #36: `subject line asks to skip the
+  release; not shipping this push`, with no IPA. The `Couldn't walk path …/Pessimal.ipa` warning that
+  follows is the expected shape of a skipped release, and the same warning on a push that *meant* to
+  ship is the alarm.
 
   The tag gate it replaced was not merely friction: every verification step was `if: build.tag == null`,
   so a tag build ran the release and *nothing else*, and the signed upload depended on nothing having
