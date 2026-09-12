@@ -39,9 +39,12 @@ carries an obligation to offer the corresponding source, and shipping the licenc
 is how that is met.
 
 **3. The macOS agent binary has to be signed, and this is the part that will bite.** Apple Silicon
-refuses to execute an unsigned Mach-O at all — not a Gatekeeper prompt, a kill. A binary
-cross-compiled on a Linux runner and dropped into a tarball is therefore dead on arrival on exactly
-the machines most likely to install it. The Developer ID certificate and notary key are already in
+will not execute an unsigned Mach-O at all — not a Gatekeeper prompt, a kill. Apple's own linker
+ad-hoc signs arm64 output, so a build *on* a Mac is fine by accident; a cross-build whose linker does
+not (lld, depending on version and flags) produces a binary that is dead on arrival on exactly the
+machines most likely to install it. Ad-hoc is enough to *run*; Developer ID plus notarization is what
+clears the quarantine flag on something a browser downloaded. Which applies depends on the channel,
+so do both and stop guessing. The Developer ID certificate and notary key are already in
 Doppler for the app (`prd_macos_notarisation`), so the agent signs with the same identity and the
 tarball gets notarized alongside. Verify by downloading the published artefact on a machine that has
 never seen the source, which is the only test that counts.

@@ -72,6 +72,27 @@ async fn a_real_backend_folds_into_a_renderable_view() {
                 metric.latest
             );
         }
+        // The used-of-total derivation, against numbers nobody here wrote. Its unit tests use
+        // fixtures of our own making, which on this project is precisely the arrangement that once
+        // let four bugs through: the fixtures and the parser agreed with each other and both
+        // disagreed with the server.
+        for capacity in &host.capacities {
+            println!(
+                "LIVE:     capacity {:<28} {} used of {} (ratio {:?})",
+                capacity.label.as_deref().unwrap_or("host-wide"),
+                capacity.used_bytes,
+                capacity
+                    .total_bytes
+                    .map_or_else(|| "unknown".to_owned(), |total| format!("{total}")),
+                capacity.utilization
+            );
+            if let (Some(total), Some(free)) = (capacity.total_bytes, capacity.free_bytes()) {
+                assert!(
+                    capacity.used_bytes <= total && free >= 0.0,
+                    "a derived total below the bytes it is the total of: {capacity:?}"
+                );
+            }
+        }
     }
 
     // A failed poll is a legitimate outcome and must not be read as an empty fleet, so the

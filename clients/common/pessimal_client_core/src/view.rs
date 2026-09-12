@@ -363,9 +363,11 @@ impl CapacityView {
 /// Pairs every `*.usage` reading with its `*.utilization` sibling — by mountpoint for filesystems,
 /// host-wide for memory — and derives the total.
 ///
-/// Takes the already-folded metric views rather than raw series so that it inherits their
-/// freshness rules: a stale or unavailable usage series has no `latest`, and so produces no
-/// capacity, instead of quietly reporting last week's disk.
+/// Takes the already-folded metric views rather than raw series, so a capacity is exactly as fresh
+/// as the rows it is derived from. A series that was never fetched has no `latest` and yields no
+/// capacity at all; an *unavailable* one keeps its frozen `latest` by design, so it yields a frozen
+/// capacity — which is correct, and is why the apps grey the pair along with the ratio above it
+/// rather than hiding it.
 #[must_use]
 pub fn capacities(metrics: &[MetricView]) -> Vec<CapacityView> {
     let mut out = Vec::new();
