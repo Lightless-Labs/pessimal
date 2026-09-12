@@ -64,6 +64,16 @@ enum MenuBarFormat {
         }
     }
 
+    /// "7.6 GB of 9.7 GB", or the used figure alone when core could not derive a total.
+    ///
+    /// Never invents a denominator: a total the core declined to derive is one it could not stand
+    /// behind, and "7.6 GB" is a true statement where "7.6 GB of ?" is noise.
+    static func capacity(_ capacity: CapacityRecord) -> String {
+        let used = byteCount(capacity.usedBytes)
+        guard let total = capacity.totalBytes, total.isFinite, total > 0 else { return used }
+        return "\(used) of \(byteCount(total))"
+    }
+
     // MARK: - Instants
 
     /// How long ago an instant was, phrased relative to `now`.

@@ -21,6 +21,9 @@ struct HostDetailMetricRow: View {
 
     let metric: MetricViewRecord
 
+    /// The used-of-total pair for this metric's family, when it has one.
+    var capacity: CapacityRecord?
+
     /// The shared tick. Passed in rather than read from `Date()` so every age on the screen agrees
     /// about the present.
     let now: Date
@@ -45,6 +48,14 @@ struct HostDetailMetricRow: View {
                     // real, they are not current, and greying them is how the difference is visible
                     // without reading the line underneath.
                     .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            }
+
+            if let capacity {
+                // Three figures, because on a detail screen "how much is left" is the question and
+                // a percentage is only the shape of the answer.
+                Text(capacityDescription(capacity))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(isCurrent ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
             }
 
             if !attributeSummary.isEmpty {
@@ -74,6 +85,12 @@ struct HostDetailMetricRow: View {
 
     /// True only for `present`. The other three availabilities all mean "this number is not current",
     /// and core's own documentation is the authority on which of them applies.
+    private func capacityDescription(_ capacity: CapacityRecord) -> String {
+        let pair = FleetFormat.capacity(capacity)
+        guard let free = capacity.freeBytes else { return pair }
+        return "\(pair) · \(FleetFormat.value(free, unit: .bytes, isRate: false)) free"
+    }
+
     private var isCurrent: Bool {
         metric.availability == .present
     }

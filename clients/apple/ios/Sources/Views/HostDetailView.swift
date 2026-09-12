@@ -255,6 +255,24 @@ struct HostDetailView: View {
 
     // MARK: - Metrics
 
+    /// The capacity belonging to a utilization row: same family, same mount. Memory is host-wide
+    /// and carries no label, so `nil == nil` pairs it.
+    ///
+    /// The usage rows keep their own line too. This section's contract is "one row per series
+    /// gathered", and hiding one because its number also appears above would make the list a
+    /// summary instead of the inventory it claims to be.
+    private func capacity(for metric: MetricViewRecord, on host: HostViewRecord) -> CapacityRecord? {
+        let wanted: MetricKindRecord
+        switch metric.kind {
+        case .memoryUtilization: wanted = .memoryUsage
+        case .filesystemUtilization: wanted = .filesystemUsage
+        default: return nil
+        }
+        return host.capacities
+            .first { $0.capacity.kind == wanted && $0.label == metric.label }?
+            .capacity
+    }
+
     /// Every series this host reports, in core's order.
     ///
     /// Not filtered and not grouped. `metrics` arrives sorted by `(kind, id)` with one entry per
@@ -268,7 +286,11 @@ struct HostDetailView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(host.metrics, id: \.id) { metric in
-                    HostDetailMetricRow(metric: metric, now: now)
+                    HostDetailMetricRow(
+                        metric: metric,
+                        capacity: capacity(for: metric, on: host),
+                        now: now
+                    )
                 }
             }
         } header: {

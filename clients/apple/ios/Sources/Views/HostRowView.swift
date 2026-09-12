@@ -33,8 +33,31 @@ struct HostRowView: View {
     private var headlineMetrics: [MetricViewRecord] {
         // A filter, never a sort. `metrics` arrives ordered by `(kind, id)` and preserving that order
         // is what keeps a `ForEach` from animating rows that did not change.
-        guard let overviewMetrics else { return host.metrics }
-        return host.metrics.filter { overviewMetrics.contains($0.kind) }
+        let reported = overviewMetrics.map { kinds in
+            host.metrics.filter { kinds.contains($0.kind) }
+        } ?? host.metrics
+        // The byte readings are fetched to be read *under their own ratio*, not charted beside it:
+        // "79%" with "7.6 GB of 9.7 GB" below it says what two separate chips could not.
+        return reported.filter { !Self.shownAsCapacity.contains($0.kind) }
+    }
+
+    /// The kinds that appear as a subtitle rather than a chip of their own.
+    private static let shownAsCapacity: Set<MetricKindRecord> = [.memoryUsage, .filesystemUsage]
+
+    /// The capacity belonging to a utilization row: same family, same mount.
+    ///
+    /// Memory is host-wide and carries no label, so `nil == nil` pairs it; a filesystem pairs on the
+    /// mountpoint core already put on both series.
+    private func capacity(for metric: MetricViewRecord) -> CapacityRecord? {
+        let wanted: MetricKindRecord
+        switch metric.kind {
+        case .memoryUtilization: wanted = .memoryUsage
+        case .filesystemUtilization: wanted = .filesystemUsage
+        default: return nil
+        }
+        return host.capacities
+            .first { $0.capacity.kind == wanted && $0.label == metric.label }?
+            .capacity
     }
 
     var body: some View {
@@ -90,7 +113,7 @@ struct HostRowView: View {
                     spacing: 8
                 ) {
                     ForEach(headlineMetrics, id: \.id) { metric in
-                        MetricChipView(metric: metric, now: now)
+                        MetricChipView(metric: metric, capacity: capacity(for: metric), now: now)
                     }
                 }
             }
@@ -210,6 +233,9 @@ struct HostBadgeView: View {
 /// One metric's newest value.
 struct MetricChipView: View {
     let metric: MetricViewRecord
+    /// The used-of-total pair for this metric's family, when it has one. Memory and filesystem do;
+    /// nothing else does.
+    var capacity: CapacityRecord?
     let now: Date
 
     var body: some View {
@@ -225,6 +251,14 @@ struct MetricChipView: View {
                 // Core is explicit that a non-`present` tile shows *frozen* values: they are real, they
                 // are not current, and greying them is how the difference is visible at a glance.
                 .foregroundStyle(isStale ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+
+            if let capacity {
+                Text(FleetFormat.capacity(capacity))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(isStale ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
 
             if let note = FleetStyle.explanation(for: metric.availability) {
                 // The macOS app puts this in a tooltip. A phone has no tooltip, and a greyed number
@@ -253,6 +287,14 @@ struct MetricChipView: View {
 
     private var accessibilityDescription: String {
         var parts = ["\(title), \(FleetFormat.latestValue(of: metric))"]
+        if let capacity {
+            // Spoken, the used-of-total matters more than the percentage it qualifies, so it is
+            // read out rather than left as a visual subtitle.
+            parts.append(FleetFormat.capacity(capacity))
+            if let free = capacity.freeBytes {
+                parts.append("\(FleetFormat.value(free, unit: .bytes, isRate: false)) free")
+            }
+        }
         if let note = FleetStyle.explanation(for: metric.availability) {
             parts.append(note)
         }
