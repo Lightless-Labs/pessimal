@@ -57,6 +57,10 @@ right auth header:
 | Honeycomb | `honeycomb` | `x-honeycomb-team`, `x-honeycomb-dataset` |
 | Anything else | `otlp` | whatever you configure |
 
+SigNoz Cloud's ingest gateway reads both `signoz-ingestion-key` and `signoz-access-token` as key
+headers: a name it does not recognise is reported as a *missing* key, while either of those two with a
+bad value is reported as an *invalid* one. That is how to tell a wrong header from a wrong key.
+
 Reading metrics back is not standardised the way OTLP export is, so each backend needs its own query
 adapter. **SigNoz is implemented and verified against a live instance**; Honeycomb and ClickStack are
 not written yet. Anything new implements one trait, `pessimal_core::TelemetryQuery`, and everything
@@ -144,6 +148,87 @@ PESSIMAL_LIVE_SIGNOZ_KEY=... \
 
 PESSIMAL_LIVE_SIGNOZ_URL=... PESSIMAL_LIVE_SIGNOZ_KEY=... \
   cargo test -p pessimal_ffi --test live_round_trip -- --nocapture
+```
+
+## Running the agent
+
+The agent is one self-contained binary with no services to install, no state on disk, and no
+privileges: it samples the host through `sysinfo` and pushes OTLP on a timer. All it needs is an
+endpoint.
+
+```bash
+cargo build --release -p pessimal_agent_host      # target/release/pessimal-agent
+cp pessimal.example.toml pessimal.toml            # then edit it
+```
+
+Three things to set in `pessimal.toml`:
+
+| Field | Why it matters |
+|---|---|
+| `export.endpoint` | Where to push. Must include the scheme; cloud backends want the port too. |
+| `export.preset` | Which auth header the key goes into. See [Backends](#backends). |
+| `resource.environment` | **The clients group by this.** An app set to `production` will not see a host reporting as `staging`. |
+
+Every field can be overridden by a `PESSIMAL_*` variable — `PESSIMAL_ENDPOINT`, `PESSIMAL_PRESET`,
+`PESSIMAL_PROTOCOL`, `PESSIMAL_API_KEY`, `PESSIMAL_INTERVAL_SECONDS`, `PESSIMAL_SERVICE_NAME`,
+`PESSIMAL_ENVIRONMENT`, `PESSIMAL_HOST_NAME` — so a credential never has to be written to disk. An
+empty value counts as unset, because that is how every orchestrator spells "nothing here".
+
+Check the config and see a sample before committing to anything. Neither command exports:
+
+```bash
+./target/release/pessimal-agent --config pessimal.toml --check    # validates, builds the exporter
+./target/release/pessimal-agent --config pessimal.toml --sample   # prints one sample
+```
+
+Then run it in the foreground and watch. The agent treats a failed export as transient and keeps
+beating, so the exit code will never tell you whether anything arrived — the per-cycle result line
+will, and it is emitted by the SDK at debug:
+
+```bash
+PESSIMAL_LOG=info,opentelemetry_sdk=debug ./target/release/pessimal-agent --config pessimal.toml
+# ... export_result="Ok(())"                                 the metrics arrived
+# ... export_result="Err(... gRPC code: Unauthenticated)"     the key is wrong
+```
+
+Over `grpc` that message names the failure. Over `http/protobuf` it does not: every non-2xx arrives as
+`HTTP export failed: network error`, status code and body discarded, so a refused credential is
+indistinguishable from an unplugged cable. Prefer `grpc` wherever the endpoint authenticates.
+
+### As a service
+
+macOS, as a per-user LaunchAgent — no root, starts at login, restarted if it dies:
+
+```bash
+scripts/install-agent-launchd.sh \
+  --environment infrastructure \
+  --preset signoz --endpoint https://ingest.eu2.signoz.cloud:443 \
+  --key-file ~/.config/pessimal/ingestion-key
+
+tail -f ~/Library/Logs/pessimal/agent.log
+scripts/install-agent-launchd.sh --uninstall
+```
+
+The key goes into the LaunchAgent plist's environment rather than the config file, and the plist is
+written mode 600: a key on `argv` would be readable by every process on the machine, and a key in
+the config is one `scp` away from somewhere it should not be.
+
+Linux has no installer script yet. The unit is small:
+
+```ini
+[Unit]
+Description=Pessimal host telemetry agent
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/pessimal-agent --config /etc/pessimal/pessimal.toml
+Environment=PESSIMAL_LOG=info
+EnvironmentFile=/etc/pessimal/key.env
+Restart=always
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ## Licence
