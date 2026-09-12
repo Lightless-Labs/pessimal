@@ -92,11 +92,19 @@
   `--action_env` flags in the fastlane lane. The spike and the design are in
   [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md).
 
-  **Still unproven: a span from a release build appearing in our SigNoz.** Everything local passes; a
-  loopback collector verified the encoding and nothing else, which is the lesson this repo already
-  learnt once. The credential flows from Doppler `prd_ios_deployment`
-  (`SIGNOZ_OTLP_ENDPOINT`, `SIGNOZ_OTLP_INGESTION_KEY`) and both are *optional* in the release script,
-  so a release without them reports nothing rather than failing.
+  **Still unproven, and now known to be blocked: the SigNoz keys on this machine are dead.**
+  `credentials/signoz.txt` in the kumbaya checkout is the only local record of them, and as of
+  2026-09-12 *both* are rejected — the View key answers `401 unauthenticated` on
+  `/api/v3/query_range`, indistinguishable from sending no key at all, and the Ingest key is refused
+  at the ingest gateway. The workspace itself is alive (`/api/v1/version` → `v0.141.0`,
+  `setupCompleted`). So nothing can be read back, and nothing a client or agent sends with that key
+  can land. Whether Doppler's `SIGNOZ_OTLP_INGESTION_KEY` is the same dead value is unknown from
+  here: the local service token is scoped to the `home-lab` project and cannot read it.
+
+  Until a key is rotated, the client-side check is the app's own Settings → Diagnostics panel: a
+  non-zero **Refused** count is precisely "the credential in this build is bad". The credential flows
+  from Doppler `prd_ios_deployment` (`SIGNOZ_OTLP_ENDPOINT`, `SIGNOZ_OTLP_INGESTION_KEY`) and both are
+  *optional* in the release script, so a release without them reports nothing rather than failing.
 
   Two follow-ups, both additive: child spans for `gather` (needs a sink handle inside
   `pessimal_query_signoz`), and a span for `probe()` (its session is a throwaway and is given no
@@ -135,6 +143,25 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --sample   # 
 cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # validate only
 ```
 
+## Running the agent as a service
+
+`scripts/install-agent-launchd.sh` installs the agent as a per-user LaunchAgent on macOS (README has
+the usage). It verifies one real export *before* bootstrapping, because the service itself runs at
+`info`, where the SDK's per-export line is not emitted — a daemon writing four lines a cycle forever
+is its own problem — so install time is the one place that line gets read.
+
+**This development mini runs one.** Label `com.lightless-labs.pessimal.agent`, reporting as
+`environment = "infrastructure"`, host `Brazeneck-College-Bad-Blintz-Mini-2-VM.local`, SigNoz Cloud
+over gRPC, key read from `~/.config/pessimal/ingestion-key` into the plist's environment (mode 600,
+never in the config file). Config at `~/Library/Application Support/pessimal/pessimal.toml`, log at
+`~/Library/Logs/pessimal/agent.log`.
+
+Its exports are currently **refused** — the ingest key is dead (see M8 above). Rotating it is two
+commands: write the new key into that file, then re-run the installer, which re-verifies and reloads.
+
+A client only sees this host if the app's own environment setting is also `infrastructure`: the roster
+query filters on it, so a mismatch looks exactly like a fleet with no hosts.
+
 ## Known issues
 
 - None open.
@@ -152,6 +179,19 @@ build succeeded, and `CFBundleVersion` stayed at whatever Info.plist said. The f
 arrived from App Store Connect on the *second* upload, after signing and uploading both times.
 
 
+- **SigNoz Cloud's two rejection messages say different things, and the difference is the whole
+  diagnosis.** `NotFound desc = No key found in request` means the *header name* was not recognised;
+  `Unauthenticated desc = Invalid or missing key` means the header was read and the *value* is bad.
+  Measured 2026-09-12, and that difference is what shows the cloud gateway *reads* both
+  `signoz-ingestion-key` (what phil-connors sends) and `signoz-access-token` (what
+  `BackendPreset::Signoz` sends) as key headers — so a refused export is not the preset's fault.
+  Whether both also *authenticate* a good key is untested, there being no good key to test with;
+  `signoz-access-token` did work live once, per M2 above.
+- **On the HTTP/protobuf path the agent reports every non-2xx as `network error`.** That string is
+  opentelemetry-otlp 0.32's label for any failed response, status code and body discarded, so a
+  rejected credential looks exactly like an unreachable host. Confirmed against a local receiver
+  hard-coded to answer 401. gRPC surfaces `gRPC code: Unauthenticated` instead, which is the reason
+  to prefer gRPC for any endpoint that authenticates.
 - **A collector on loopback verifies almost nothing.** Four real bugs survived every local run, the
   CI export job and the smoke script, and all four fell out of the first contact with a real
   backend: no TLS roots on the gRPC path, the response envelope parsed one level too shallow, the
@@ -247,9 +287,11 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 
 **M8 phase 1 is built.** What remains:
 
-1. **Verify live.** Cut a TestFlight build with the two Doppler secrets present and find the trace in
-   our SigNoz. `scripts/otlp-trace-probe.py` against the real ingest endpoint is the faster first
-   check — it answers "does the credential work and is the header right" in seconds, without a release.
+1. **Rotate the SigNoz keys, then verify live.** Both keys in the kumbaya credentials file are
+   rejected (see M8 above), so this is blocked on a new View key and a new Ingest key from the SigNoz
+   console. `scripts/otlp-trace-probe.py` against the real ingest endpoint answers "does this
+   credential work" in seconds, without a release; then check whether Doppler's
+   `SIGNOZ_OTLP_INGESTION_KEY` needs the same rotation, and look for the trace in the workspace.
 2. Child spans for `gather`, which needs `pessimal_query_signoz` to hold a sink handle.
 3. **M8 phase 2, the agent.** `[usage_reporting]` in the config, `DO_NOT_TRACK` and `CI` honoured
    (both already implemented in `pessimal_usage::consent`), agent-side span variants, and
