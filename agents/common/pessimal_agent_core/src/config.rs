@@ -187,7 +187,13 @@ impl AgentConfig {
     /// Returns [`AgentError::Config`] if a value does not parse, or if the result does not
     /// validate.
     pub fn apply_env(&mut self, env: &BTreeMap<String, String>) -> Result<()> {
-        let get = |suffix: &str| env.get(&format!("{ENV_PREFIX}{suffix}"));
+        // An empty value counts as unset. Every system that injects environment variables --
+        // launchd, compose, a CI matrix -- expresses "no value here" as an empty one, and reading
+        // that literally turns `PESSIMAL_API_KEY=` into a refusal to start.
+        let get = |suffix: &str| {
+            env.get(&format!("{ENV_PREFIX}{suffix}"))
+                .filter(|value| !value.is_empty())
+        };
 
         if let Some(value) = get("ENDPOINT") {
             self.export.endpoint.clone_from(value);
@@ -491,6 +497,30 @@ mod tests {
         assert_eq!(config.export.api_key.as_deref(), Some("tok"));
         assert_eq!(config.export.interval_seconds, 15);
         assert_eq!(config.resource.environment, "prod");
+    }
+
+    #[test]
+    fn an_empty_override_counts_as_unset() {
+        // Every orchestrator that passes variables -- launchd, compose, CI -- spells "no value" as
+        // an empty one. Taking that literally made `PESSIMAL_API_KEY=` a startup failure: an empty
+        // key with a preset that has nowhere to put one does not validate.
+        let mut config = AgentConfig::from_toml(MINIMAL).expect("valid");
+        let before = config.clone();
+        config
+            .apply_env(&env(&[
+                ("PESSIMAL_API_KEY", ""),
+                ("PESSIMAL_DATASET", ""),
+                ("PESSIMAL_HOST_NAME", ""),
+                ("PESSIMAL_ENDPOINT", ""),
+                ("PESSIMAL_ENVIRONMENT", ""),
+            ]))
+            .expect("an empty override must not fail validation");
+
+        assert_eq!(config.export.api_key, before.export.api_key);
+        assert_eq!(config.export.dataset, before.export.dataset);
+        assert_eq!(config.resource.host_name, before.resource.host_name);
+        assert_eq!(config.export.endpoint, before.export.endpoint);
+        assert_eq!(config.resource.environment, before.resource.environment);
     }
 
     #[test]
