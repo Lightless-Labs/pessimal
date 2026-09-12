@@ -96,19 +96,30 @@
   `--action_env` flags in the fastlane lane. The spike and the design are in
   [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md).
 
-  **Still unproven, and now known to be blocked: the SigNoz keys on this machine are dead.**
-  `credentials/signoz.txt` in the kumbaya checkout is the only local record of them, and as of
-  2026-09-12 *both* are rejected — the View key answers `401 unauthenticated` on
-  `/api/v3/query_range`, indistinguishable from sending no key at all, and the Ingest key is refused
-  at the ingest gateway. The workspace itself is alive (`/api/v1/version` → `v0.141.0`,
-  `setupCompleted`). So nothing can be read back, and nothing a client or agent sends with that key
-  can land. Whether Doppler's `SIGNOZ_OTLP_INGESTION_KEY` is the same dead value is unknown from
-  here: the local service token is scoped to the `home-lab` project and cannot read it.
+  **Verified live 2026-09-12.** Three `pessimal.client.poll` spans from build **35** are in our SigNoz,
+  queryable with every attribute the allowlist promises and nothing else: `pessimal.app.build=35`,
+  `pessimal.platform=ios`, `pessimal.device.class=phone`, `pessimal.os.version=26.6`,
+  `service.version=0.1.0`, `pessimal.backend.kind=signoz`, `pessimal.outcome=ok`, counts at 0, status
+  code 1, no error. The session-scoped install id behaved as designed — two spans minutes apart share
+  one `service.instance.id` and the span six hours earlier has a different one, so nothing persistent
+  identifies the device. That closes the encoder question too: what the device encoded is what the
+  backend stored and returned.
 
-  Until a key is rotated, the client-side check is the app's own Settings → Diagnostics panel: a
-  non-zero **Refused** count is precisely "the credential in this build is bad". The credential flows
-  from Doppler `prd_ios_deployment` (`SIGNOZ_OTLP_ENDPOINT`, `SIGNOZ_OTLP_INGESTION_KEY`) and both are
-  *optional* in the release script, so a release without them reports nothing rather than failing.
+  It took a key rotation to get there. The pair recorded in kumbaya's `credentials/signoz.txt` had
+  both expired: the View key answered `401 unauthenticated` on `/api/v3/query_range`
+  indistinguishably from sending no key at all, and the Ingest key was refused at the gateway, while
+  the workspace itself was fine (`/api/v1/version` → `v0.141.0`). Worth knowing that a dead key looks
+  exactly like no key on the query API, so "I am sending a key and getting 401" is not evidence about
+  the key's spelling — and that the local Doppler service token is scoped to `home-lab` and cannot
+  read the iOS release secrets, so Doppler's copy can only be tested from CI.
+
+  Rotated keys arrived the same day and `credentials/signoz.txt` now holds the live pair. Doppler's
+  `SIGNOZ_OTLP_INGESTION_KEY` was evidently never the dead one — build 35's spans arrived before the
+  rotation — but if the old keys were *revoked* rather than merely superseded, Doppler needs the new
+  ingest key too. The client-side tell either way is the app's Settings → Diagnostics panel: a non-zero
+  **Refused** count is precisely "the credential in this build is bad". The credential flows from
+  Doppler `prd_ios_deployment` (`SIGNOZ_OTLP_ENDPOINT`, `SIGNOZ_OTLP_INGESTION_KEY`), both *optional*
+  in the release script, so a release without them reports nothing rather than failing.
 
   Two follow-ups, both additive: child spans for `gather` (needs a sink handle inside
   `pessimal_query_signoz`), and a span for `probe()` (its session is a throwaway and is given no
@@ -160,11 +171,16 @@ over gRPC, key read from `~/.config/pessimal/ingestion-key` into the plist's env
 never in the config file). Config at `~/Library/Application Support/pessimal/pessimal.toml`, log at
 `~/Library/Logs/pessimal/agent.log`.
 
-Its exports are currently **refused** — the ingest key is dead (see M8 above). Rotating it is two
-commands: write the new key into that file, then re-run the installer, which re-verifies and reloads.
+Its metrics are **arriving**: `pessimal.agent.heartbeat` and the `system.*` family are queryable under
+`deployment.environment.name=infrastructure`, and `list_hosts` finds the host and folds it to `Alive`.
+Rotating the key is two commands: write the new one into that file, then re-run the installer, which
+re-verifies and reloads.
 
-A client only sees this host if the app's own environment setting is also `infrastructure`: the roster
-query filters on it, so a mismatch looks exactly like a fleet with no hosts.
+The environment does **not** gate what a client sees, contrary to what this file said earlier today.
+`list_hosts` rolls call on `pessimal.agent.heartbeat` across everything the key can read, and the
+SigNoz adapter has no notion of an environment at all — the client's own environment is a URN segment
+for alert-rule identity. Measured: `live_round_trip` runs as environment `live-verify` and sees this
+host, which reports `infrastructure`.
 
 ## Known issues
 
@@ -183,6 +199,13 @@ build succeeded, and `CFBundleVersion` stayed at whatever Info.plist said. The f
 arrived from App Store Connect on the *second* upload, after signing and uploading both times.
 
 
+- **The live read-path tests can fail cold, and it looks like a broken backend.** The first parallel
+  run of `live_signoz` against production failed three tests with
+  `Unreachable("error sending request for url …/api/v5/query_range")` after 49s; every run after it
+  passed, in 21.9s and then 1.45s. Three test binaries each build their own client, so that is ~36
+  concurrent requests over cold connections against the adapter's 30s `request_timeout` — a timeout
+  wearing a transport error's clothes, not an auth or shape problem. `--test-threads=1` settles it in
+  under two seconds. A single client's fan-out is fine: `live_round_trip` passed first time.
 - **SigNoz Cloud's two rejection messages say different things, and the difference is the whole
   diagnosis.** `NotFound desc = No key found in request` means the *header name* was not recognised;
   `Unauthenticated desc = Invalid or missing key` means the header was read and the *value* is bad.

@@ -167,7 +167,7 @@ Three things to set in `pessimal.toml`:
 |---|---|
 | `export.endpoint` | Where to push. Must include the scheme; cloud backends want the port too. |
 | `export.preset` | Which auth header the key goes into. See [Backends](#backends). |
-| `resource.environment` | **The clients group by this.** An app set to `production` will not see a host reporting as `staging`. |
+| `resource.environment` | Stamped on every metric as `deployment.environment.name`, which is how you tell two deployments apart in the backend. It does *not* filter what a client sees: the roster rolls call on every agent heartbeat the key can read. |
 
 Every field can be overridden by a `PESSIMAL_*` variable — `PESSIMAL_ENDPOINT`, `PESSIMAL_PRESET`,
 `PESSIMAL_PROTOCOL`, `PESSIMAL_API_KEY`, `PESSIMAL_INTERVAL_SECONDS`, `PESSIMAL_SERVICE_NAME`,
