@@ -311,6 +311,7 @@ impl FleetState {
                 .max()
                 .map_or(liveness_severity, |worst| liveness_severity.max(worst));
 
+            let metrics = self.metric_views(id, tuning.metric_step());
             hosts.push(HostView {
                 id: id.clone(),
                 os: record.host.os,
@@ -320,7 +321,8 @@ impl FleetState {
                 liveness_at: record.liveness_at,
                 severity,
                 collection: self.collection_health(id, tuning.metric_step()),
-                metrics: self.metric_views(id, tuning.metric_step()),
+                metrics: metrics.clone(),
+                capacities: crate::view::capacities(&metrics),
                 firing_alerts: firing,
                 pending_alerts: pending,
                 in_current_roster: record.in_current_roster,

@@ -327,6 +327,98 @@ pub enum CollectionHealth {
     Unknown,
 }
 
+/// A used-of-total pair in bytes, for the one question every memory and disk reading actually
+/// raises: out of how much?
+///
+/// Derived rather than reported. The agent exports `*.usage` in bytes and `*.utilization` as a
+/// ratio of the same two numbers it divided, so `used / utilization` recovers the total exactly.
+/// That is worth knowing the day an agent starts exporting `system.memory.limit` as semconv
+/// suggests: this becomes a reading rather than a derivation, and nothing above it changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CapacityView {
+    /// The `*.usage` series' id, so a list can key on it without inventing an identity.
+    pub id: String,
+    /// Which family this is: [`MetricKind::MemoryUsage`] or [`MetricKind::FilesystemUsage`].
+    pub kind: MetricKind,
+    /// The mountpoint for a filesystem. `None` for memory, which is host-wide.
+    pub label: Option<String>,
+    pub used_bytes: f64,
+    /// `None` when the utilization series is missing, or outside `0.0 < u <= 1.0` — a total
+    /// computed from a ratio that cannot be one is worse than no total at all.
+    pub total_bytes: Option<f64>,
+    pub utilization: Option<f64>,
+    /// The timestamp of the `used_bytes` reading.
+    pub at: DateTime<Utc>,
+}
+
+impl CapacityView {
+    /// Bytes unaccounted for by `used_bytes`. `None` without a total.
+    #[must_use]
+    pub fn free_bytes(&self) -> Option<f64> {
+        self.total_bytes
+            .map(|total| (total - self.used_bytes).max(0.0))
+    }
+}
+
+/// Pairs every `*.usage` reading with its `*.utilization` sibling — by mountpoint for filesystems,
+/// host-wide for memory — and derives the total.
+///
+/// Takes the already-folded metric views rather than raw series so that it inherits their
+/// freshness rules: a stale or unavailable usage series has no `latest`, and so produces no
+/// capacity, instead of quietly reporting last week's disk.
+#[must_use]
+pub fn capacities(metrics: &[MetricView]) -> Vec<CapacityView> {
+    let mut out = Vec::new();
+    for usage in metrics {
+        let (utilization_kind, bytes_kind) = match usage.kind {
+            MetricKind::MemoryUsage => (MetricKind::MemoryUtilization, MetricKind::MemoryUsage),
+            MetricKind::FilesystemUsage => (
+                MetricKind::FilesystemUtilization,
+                MetricKind::FilesystemUsage,
+            ),
+            _ => continue,
+        };
+        // A collector may break usage down by state. Only the used slice is a "used of total".
+        if let Some(state) = usage.attributes.get(normalize::MEMORY_STATE)
+            && state != "used"
+        {
+            continue;
+        }
+        if let Some(state) = usage.attributes.get(normalize::FILESYSTEM_STATE)
+            && state != "used"
+        {
+            continue;
+        }
+        let Some(point) = usage.latest else { continue };
+
+        let mount = usage.attributes.get(normalize::FILESYSTEM_MOUNTPOINT);
+        let utilization = metrics
+            .iter()
+            .find(|candidate| {
+                candidate.kind == utilization_kind
+                    && candidate.attributes.get(normalize::FILESYSTEM_MOUNTPOINT) == mount
+            })
+            .and_then(|view| view.latest)
+            .map(|point| point.value);
+
+        let total = utilization
+            .filter(|ratio| ratio.is_finite() && *ratio > 0.0 && *ratio <= 1.0)
+            .map(|ratio| point.value / ratio)
+            .filter(|total| total.is_finite());
+
+        out.push(CapacityView {
+            id: usage.id.clone(),
+            kind: bytes_kind,
+            label: mount.cloned(),
+            used_bytes: point.value,
+            total_bytes: total,
+            utilization,
+            at: point.at,
+        });
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostView {
     pub id: HostId,
@@ -341,6 +433,9 @@ pub struct HostView {
     pub collection: CollectionHealth,
     /// Sorted by `(kind, id)`, one entry per attribute set.
     pub metrics: Vec<MetricView>,
+    /// Derived from `metrics`: one entry per memory or filesystem usage series. Empty when the
+    /// byte metrics were not fetched, which is not an error — see [`capacities`].
+    pub capacities: Vec<CapacityView>,
     pub firing_alerts: u32,
     pub pending_alerts: u32,
     /// False for a retained host absent from the last listed roster.
@@ -496,11 +591,13 @@ impl FleetView {
 #[cfg(test)]
 mod tests {
     use super::{
-        AlertPhase, Freshness, FreshnessInputs, MetricAvailability, Severity, alertable,
-        describe_metric, expected_on, freshness_at,
+        AlertPhase, Freshness, FreshnessInputs, MetricAvailability, MetricView, Severity,
+        alertable, capacities, describe_metric, expected_on, freshness_at,
     };
     use chrono::{DateTime, Duration, Utc};
-    use pessimal_core::{AlertState, CoreError, Liveness, MetricKind, MetricUnit, OsFamily};
+    use pessimal_core::{
+        AlertState, CoreError, Liveness, MetricKind, MetricPoint, MetricUnit, OsFamily,
+    };
 
     use crate::error::{FailureSource, PollFailure};
 
@@ -748,5 +845,186 @@ mod tests {
             !alertable(MetricKind::AgentHeartbeat),
             "a silent host is liveness's business, never an alert's"
         );
+    }
+    /// A usage series and its utilization sibling, as the fold would have produced them.
+    fn usage_view(
+        kind: MetricKind,
+        attributes: &[(&str, &str)],
+        value: f64,
+        unit: MetricUnit,
+    ) -> MetricView {
+        let attributes: std::collections::BTreeMap<String, String> = attributes
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let point = MetricPoint { at: at(0), value };
+        MetricView {
+            id: format!("web-1|{}|{attributes:?}", kind.otel_name()),
+            kind,
+            unit,
+            display_name: kind.otel_name().to_owned(),
+            label: None,
+            attributes,
+            latest: Some(point),
+            points: vec![point],
+            availability: MetricAvailability::Present,
+            is_rate: false,
+            expected_step: Duration::seconds(60),
+            resets: Vec::new(),
+            fetched_at: Some(at(0)),
+        }
+    }
+
+    const GIB: f64 = 1_073_741_824.0;
+
+    #[test]
+    fn a_used_byte_reading_and_its_ratio_recover_the_total() {
+        let views = vec![
+            usage_view(
+                MetricKind::MemoryUsage,
+                &[("system.memory.state", "used")],
+                6.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(MetricKind::MemoryUtilization, &[], 0.75, MetricUnit::Ratio),
+        ];
+        let derived = capacities(&views);
+
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].kind, MetricKind::MemoryUsage);
+        assert!((derived[0].used_bytes - 6.0 * GIB).abs() < 1.0);
+        assert!(
+            (derived[0].total_bytes.expect("a total") - 8.0 * GIB).abs() < 1.0,
+            "6 GiB at 75% is 8 GiB"
+        );
+        assert!((derived[0].free_bytes().expect("free") - 2.0 * GIB).abs() < 1.0);
+    }
+
+    #[test]
+    fn filesystems_pair_by_mountpoint_and_never_across_mounts() {
+        fn mount(path: &str) -> [(&str, &str); 1] {
+            [("system.filesystem.mountpoint", path)]
+        }
+        let views = vec![
+            usage_view(
+                MetricKind::FilesystemUsage,
+                &mount("/"),
+                100.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(
+                MetricKind::FilesystemUsage,
+                &mount("/data"),
+                10.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(
+                MetricKind::FilesystemUtilization,
+                &mount("/"),
+                0.5,
+                MetricUnit::Ratio,
+            ),
+            usage_view(
+                MetricKind::FilesystemUtilization,
+                &mount("/data"),
+                0.1,
+                MetricUnit::Ratio,
+            ),
+        ];
+        let derived = capacities(&views);
+
+        assert_eq!(derived.len(), 2);
+        let root = derived
+            .iter()
+            .find(|c| c.label.as_deref() == Some("/"))
+            .expect("the root mount");
+        let data = derived
+            .iter()
+            .find(|c| c.label.as_deref() == Some("/data"))
+            .expect("the data mount");
+        assert!((root.total_bytes.expect("total") - 200.0 * GIB).abs() < 1.0);
+        assert!((data.total_bytes.expect("total") - 100.0 * GIB).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_ratio_that_cannot_be_a_ratio_yields_no_total() {
+        // Zero would divide, and above one would put the total below the used bytes. Both are
+        // better reported as "we know what is used and not what of" than as a confident wrong
+        // number.
+        for bad in [0.0, -0.1, 1.5, f64::NAN] {
+            let views = vec![
+                usage_view(
+                    MetricKind::MemoryUsage,
+                    &[("system.memory.state", "used")],
+                    6.0 * GIB,
+                    MetricUnit::Bytes,
+                ),
+                usage_view(MetricKind::MemoryUtilization, &[], bad, MetricUnit::Ratio),
+            ];
+            let derived = capacities(&views);
+            assert_eq!(derived.len(), 1, "the used reading still stands");
+            assert!(
+                derived[0].total_bytes.is_none(),
+                "{bad} must not produce a total"
+            );
+            assert!(derived[0].free_bytes().is_none());
+        }
+    }
+
+    #[test]
+    fn a_usage_series_with_no_sibling_still_reports_what_is_used() {
+        let views = vec![usage_view(
+            MetricKind::MemoryUsage,
+            &[("system.memory.state", "used")],
+            6.0 * GIB,
+            MetricUnit::Bytes,
+        )];
+        let derived = capacities(&views);
+        assert_eq!(derived.len(), 1);
+        assert!(derived[0].total_bytes.is_none());
+        assert!(derived[0].utilization.is_none());
+    }
+
+    #[test]
+    fn only_the_used_slice_counts_when_a_collector_breaks_usage_down_by_state() {
+        // Our agent exports only `used`, but semconv allows free and cached alongside it, and
+        // summing them as "used" would double-count.
+        let views = vec![
+            usage_view(
+                MetricKind::MemoryUsage,
+                &[("system.memory.state", "used")],
+                6.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(
+                MetricKind::MemoryUsage,
+                &[("system.memory.state", "free")],
+                2.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(
+                MetricKind::FilesystemUsage,
+                &[
+                    ("system.filesystem.mountpoint", "/"),
+                    ("system.filesystem.state", "reserved"),
+                ],
+                1.0 * GIB,
+                MetricUnit::Bytes,
+            ),
+            usage_view(MetricKind::MemoryUtilization, &[], 0.75, MetricUnit::Ratio),
+        ];
+        let derived = capacities(&views);
+
+        assert_eq!(derived.len(), 1, "free and reserved are not usage");
+        assert!((derived[0].used_bytes - 6.0 * GIB).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_metric_that_is_not_bytes_is_not_a_capacity() {
+        let views = vec![
+            usage_view(MetricKind::CpuUtilization, &[], 0.5, MetricUnit::Ratio),
+            usage_view(MetricKind::SystemUptime, &[], 600.0, MetricUnit::Seconds),
+        ];
+        assert!(capacities(&views).is_empty());
     }
 }

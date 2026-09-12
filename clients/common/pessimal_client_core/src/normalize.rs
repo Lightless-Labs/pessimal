@@ -31,10 +31,12 @@ use serde::{Deserialize, Serialize};
 
 /// The attribute a per-mount filesystem series is split by, as the agent attaches it and the
 /// adapter groups by it (`naming.rs::extra_dimensions`).
-const FILESYSTEM_MOUNTPOINT: &str = "system.filesystem.mountpoint";
+pub(crate) const FILESYSTEM_MOUNTPOINT: &str = "system.filesystem.mountpoint";
 const NETWORK_INTERFACE_NAME: &str = "network.interface.name";
 const NETWORK_IO_DIRECTION: &str = "network.io.direction";
-const MEMORY_STATE: &str = "system.memory.state";
+pub(crate) const MEMORY_STATE: &str = "system.memory.state";
+/// `used` | `free` | `reserved`. Only the used slice is half of a "used of total".
+pub(crate) const FILESYSTEM_STATE: &str = "system.filesystem.state";
 
 /// What a metric's raw samples have to become before anything reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

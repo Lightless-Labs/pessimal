@@ -92,7 +92,8 @@ pub use crate::rules::{
     delete_rule, draft_rule, load_rules, parse_rule_id, save_rule, validate_rule,
 };
 pub use crate::view::{
-    AlertEvidence, AlertPhase, AlertView, CollectionHealth, FleetCounts, FleetView, Freshness,
-    FreshnessInputs, HostView, MetricAvailability, MetricFacts, MetricView, PLACEHOLDER_HOST_ID,
-    Severity, alertable, describe_metric, expected_on, freshness_at, metric_facts,
+    AlertEvidence, AlertPhase, AlertView, CapacityView, CollectionHealth, FleetCounts, FleetView,
+    Freshness, FreshnessInputs, HostView, MetricAvailability, MetricFacts, MetricView,
+    PLACEHOLDER_HOST_ID, Severity, alertable, capacities, describe_metric, expected_on,
+    freshness_at, metric_facts,
 };

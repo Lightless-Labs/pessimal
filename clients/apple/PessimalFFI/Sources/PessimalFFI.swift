@@ -1917,6 +1917,164 @@ public func FfiConverterTypeBackendProbeRecord_lower(_ value: BackendProbeRecord
 
 
 /**
+ * A capacity with the identity of the series it came from, so a metric row can find its own.
+ */
+public struct CapacityEntryRecord: Equatable, Hashable {
+    /**
+     * The `*.usage` series id — matches a `MetricViewRecord.id`.
+     */
+    public let id: String
+    /**
+     * The mountpoint for a filesystem; `None` for memory.
+     */
+    public let label: String?
+    public let capacity: CapacityRecord
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The `*.usage` series id — matches a `MetricViewRecord.id`.
+         */id: String, 
+        /**
+         * The mountpoint for a filesystem; `None` for memory.
+         */label: String?, capacity: CapacityRecord) {
+        self.id = id
+        self.label = label
+        self.capacity = capacity
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CapacityEntryRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCapacityEntryRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CapacityEntryRecord {
+        return
+            try CapacityEntryRecord(
+                id: FfiConverterString.read(from: &buf), 
+                label: FfiConverterOptionString.read(from: &buf), 
+                capacity: FfiConverterTypeCapacityRecord.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CapacityEntryRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.label, into: &buf)
+        FfiConverterTypeCapacityRecord.write(value.capacity, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapacityEntryRecord_lift(_ buf: RustBuffer) throws -> CapacityEntryRecord {
+    return try FfiConverterTypeCapacityEntryRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapacityEntryRecord_lower(_ value: CapacityEntryRecord) -> RustBuffer {
+    return FfiConverterTypeCapacityEntryRecord.lower(value)
+}
+
+
+/**
+ * A used-of-total byte pair for one memory or filesystem reading.
+ *
+ * `free_bytes` is carried rather than left to Swift so that a row cannot subtract differently from
+ * the tooltip beside it. All three byte fields are `f64` because that is what the metric pipeline
+ * carries end to end; a disk large enough to lose precision in an `f64` does not exist.
+ */
+public struct CapacityRecord: Equatable, Hashable {
+    public let kind: MetricKindRecord
+    public let usedBytes: Double
+    /**
+     * `None` when it could not be derived — no utilization reading, or one outside `0 < u <= 1`.
+     * Render the used figure alone rather than inventing a denominator.
+     */
+    public let totalBytes: Double?
+    public let freeBytes: Double?
+    public let utilization: Double?
+    public let atMillis: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(kind: MetricKindRecord, usedBytes: Double, 
+        /**
+         * `None` when it could not be derived — no utilization reading, or one outside `0 < u <= 1`.
+         * Render the used figure alone rather than inventing a denominator.
+         */totalBytes: Double?, freeBytes: Double?, utilization: Double?, atMillis: Int64) {
+        self.kind = kind
+        self.usedBytes = usedBytes
+        self.totalBytes = totalBytes
+        self.freeBytes = freeBytes
+        self.utilization = utilization
+        self.atMillis = atMillis
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CapacityRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCapacityRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CapacityRecord {
+        return
+            try CapacityRecord(
+                kind: FfiConverterTypeMetricKindRecord.read(from: &buf), 
+                usedBytes: FfiConverterDouble.read(from: &buf), 
+                totalBytes: FfiConverterOptionDouble.read(from: &buf), 
+                freeBytes: FfiConverterOptionDouble.read(from: &buf), 
+                utilization: FfiConverterOptionDouble.read(from: &buf), 
+                atMillis: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CapacityRecord, into buf: inout [UInt8]) {
+        FfiConverterTypeMetricKindRecord.write(value.kind, into: &buf)
+        FfiConverterDouble.write(value.usedBytes, into: &buf)
+        FfiConverterOptionDouble.write(value.totalBytes, into: &buf)
+        FfiConverterOptionDouble.write(value.freeBytes, into: &buf)
+        FfiConverterOptionDouble.write(value.utilization, into: &buf)
+        FfiConverterInt64.write(value.atMillis, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapacityRecord_lift(_ buf: RustBuffer) throws -> CapacityRecord {
+    return try FfiConverterTypeCapacityRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapacityRecord_lower(_ value: CapacityRecord) -> RustBuffer {
+    return FfiConverterTypeCapacityRecord.lower(value)
+}
+
+
+/**
  * Everything the user configures: which environment, how to poll, what to alert on, what to
  * chart, and which host is focused.
  */
@@ -2353,6 +2511,12 @@ public struct HostViewRecord: Equatable, Hashable {
      * Sorted by `(kind, id)`, one entry per attribute set.
      */
     public let metrics: [MetricViewRecord]
+    /**
+     * One entry per memory or filesystem usage series, keyed by the series id so a row can find
+     * its own: `"{host}|system.filesystem.usage|system.filesystem.mountpoint=/"`. Empty when the
+     * byte metrics were not among the fetched set, which is a configuration, not a fault.
+     */
+    public let capacities: [CapacityEntryRecord]
     public let firingAlerts: UInt32
     public let pendingAlerts: UInt32
     /**
@@ -2376,7 +2540,12 @@ public struct HostViewRecord: Equatable, Hashable {
          */livenessAtMillis: Int64, severity: SeverityRecord, collection: CollectionHealthRecord, 
         /**
          * Sorted by `(kind, id)`, one entry per attribute set.
-         */metrics: [MetricViewRecord], firingAlerts: UInt32, pendingAlerts: UInt32, 
+         */metrics: [MetricViewRecord], 
+        /**
+         * One entry per memory or filesystem usage series, keyed by the series id so a row can find
+         * its own: `"{host}|system.filesystem.usage|system.filesystem.mountpoint=/"`. Empty when the
+         * byte metrics were not among the fetched set, which is a configuration, not a fault.
+         */capacities: [CapacityEntryRecord], firingAlerts: UInt32, pendingAlerts: UInt32, 
         /**
          * False for a retained host absent from the last listed roster. Such a host is a positive
          * `Down` with a badge, not a row that silently vanished at the moment the operator needed it.
@@ -2395,6 +2564,7 @@ public struct HostViewRecord: Equatable, Hashable {
         self.severity = severity
         self.collection = collection
         self.metrics = metrics
+        self.capacities = capacities
         self.firingAlerts = firingAlerts
         self.pendingAlerts = pendingAlerts
         self.inCurrentRoster = inCurrentRoster
@@ -2426,6 +2596,7 @@ public struct FfiConverterTypeHostViewRecord: FfiConverterRustBuffer {
                 severity: FfiConverterTypeSeverityRecord.read(from: &buf), 
                 collection: FfiConverterTypeCollectionHealthRecord.read(from: &buf), 
                 metrics: FfiConverterSequenceTypeMetricViewRecord.read(from: &buf), 
+                capacities: FfiConverterSequenceTypeCapacityEntryRecord.read(from: &buf), 
                 firingAlerts: FfiConverterUInt32.read(from: &buf), 
                 pendingAlerts: FfiConverterUInt32.read(from: &buf), 
                 inCurrentRoster: FfiConverterBool.read(from: &buf), 
@@ -2443,6 +2614,7 @@ public struct FfiConverterTypeHostViewRecord: FfiConverterRustBuffer {
         FfiConverterTypeSeverityRecord.write(value.severity, into: &buf)
         FfiConverterTypeCollectionHealthRecord.write(value.collection, into: &buf)
         FfiConverterSequenceTypeMetricViewRecord.write(value.metrics, into: &buf)
+        FfiConverterSequenceTypeCapacityEntryRecord.write(value.capacities, into: &buf)
         FfiConverterUInt32.write(value.firingAlerts, into: &buf)
         FfiConverterUInt32.write(value.pendingAlerts, into: &buf)
         FfiConverterBool.write(value.inCurrentRoster, into: &buf)
@@ -6351,6 +6523,31 @@ fileprivate struct FfiConverterSequenceTypeAttributeRecord: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAttributeRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeCapacityEntryRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [CapacityEntryRecord]
+
+    public static func write(_ value: [CapacityEntryRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCapacityEntryRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CapacityEntryRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CapacityEntryRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCapacityEntryRecord.read(from: &buf))
         }
         return seq
     }

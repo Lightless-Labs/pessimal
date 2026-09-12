@@ -36,10 +36,15 @@ use crate::error::{ClientError, Result};
 /// beating happily while its sampling fails every cycle: a failed collection re-exports the
 /// previous snapshot with fresh timestamps, so every other metric looks like a flat line rather
 /// than a gap.
-pub const DEFAULT_OVERVIEW_METRICS: [MetricKind; 5] = [
+pub const DEFAULT_OVERVIEW_METRICS: [MetricKind; 7] = [
     MetricKind::CpuUtilization,
     MetricKind::MemoryUtilization,
+    // The byte readings are here to be *read*, not charted: paired with the ratio above them they
+    // are what turns "79%" into "7.6 GB of 9.7 GB", which is the figure an operator can act on.
+    // Two extra series per poll is the whole cost.
+    MetricKind::MemoryUsage,
     MetricKind::FilesystemUtilization,
+    MetricKind::FilesystemUsage,
     MetricKind::LoadAverage1m,
     MetricKind::AgentCollectionFailures,
 ];

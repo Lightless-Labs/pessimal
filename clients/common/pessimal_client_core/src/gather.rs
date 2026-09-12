@@ -363,13 +363,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_five_query_plan_produces_five_outcomes_in_plan_order() {
+    async fn a_plan_produces_one_outcome_per_query_in_plan_order() {
         let config = config();
         let plan = plan_poll(&config, at(0)).expect("the default tuning has positive windows");
         assert_eq!(
             plan.queries.len(),
-            5,
-            "the default overview set is five fleet-wide requests"
+            crate::config::DEFAULT_OVERVIEW_METRICS.len(),
+            "one fleet-wide request per overview metric -- asserted against the constant, because              the count is a configuration and the pairing below is the actual subject"
         );
 
         let query = scripted_everything(ScriptedQuery::new("SigNoz").with_hosts(Ok(vec![])));

@@ -44,8 +44,9 @@
 //!   settings screen cannot forget to ask for it.
 
 use pessimal_client_core::{
-    AlertEvidence, AlertPhase, AlertView, CollectionHealth, FleetCounts, FleetView, Freshness,
-    FreshnessInputs, HostView, MetricAvailability, MetricFacts, MetricView, PollFailure, Severity,
+    AlertEvidence, AlertPhase, AlertView, CapacityView, CollectionHealth, FleetCounts, FleetView,
+    Freshness, FreshnessInputs, HostView, MetricAvailability, MetricFacts, MetricView, PollFailure,
+    Severity,
 };
 use pessimal_core::{Liveness, MetricPoint, MetricUnit, OsFamily};
 
@@ -648,6 +649,56 @@ pub struct MetricViewRecord {
     pub fetched_at_millis: Option<i64>,
 }
 
+/// A capacity with the identity of the series it came from, so a metric row can find its own.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CapacityEntryRecord {
+    /// The `*.usage` series id — matches a `MetricViewRecord.id`.
+    pub id: String,
+    /// The mountpoint for a filesystem; `None` for memory.
+    pub label: Option<String>,
+    pub capacity: CapacityRecord,
+}
+
+/// A used-of-total byte pair for one memory or filesystem reading.
+///
+/// `free_bytes` is carried rather than left to Swift so that a row cannot subtract differently from
+/// the tooltip beside it. All three byte fields are `f64` because that is what the metric pipeline
+/// carries end to end; a disk large enough to lose precision in an `f64` does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct CapacityRecord {
+    pub kind: MetricKindRecord,
+    pub used_bytes: f64,
+    /// `None` when it could not be derived — no utilization reading, or one outside `0 < u <= 1`.
+    /// Render the used figure alone rather than inventing a denominator.
+    pub total_bytes: Option<f64>,
+    pub free_bytes: Option<f64>,
+    pub utilization: Option<f64>,
+    pub at_millis: i64,
+}
+
+impl From<CapacityView> for CapacityEntryRecord {
+    fn from(view: CapacityView) -> Self {
+        Self {
+            id: view.id.clone(),
+            label: view.label.clone(),
+            capacity: CapacityRecord::from(view),
+        }
+    }
+}
+
+impl From<CapacityView> for CapacityRecord {
+    fn from(view: CapacityView) -> Self {
+        Self {
+            kind: MetricKindRecord::from(view.kind),
+            used_bytes: view.used_bytes,
+            total_bytes: view.total_bytes,
+            free_bytes: view.free_bytes(),
+            utilization: view.utilization,
+            at_millis: datetime_to_millis(view.at),
+        }
+    }
+}
+
 impl From<MetricView> for MetricViewRecord {
     fn from(view: MetricView) -> Self {
         let MetricView {
@@ -702,6 +753,10 @@ pub struct HostViewRecord {
     pub collection: CollectionHealthRecord,
     /// Sorted by `(kind, id)`, one entry per attribute set.
     pub metrics: Vec<MetricViewRecord>,
+    /// One entry per memory or filesystem usage series, keyed by the series id so a row can find
+    /// its own: `"{host}|system.filesystem.usage|system.filesystem.mountpoint=/"`. Empty when the
+    /// byte metrics were not among the fetched set, which is a configuration, not a fault.
+    pub capacities: Vec<CapacityEntryRecord>,
     pub firing_alerts: u32,
     pub pending_alerts: u32,
     /// False for a retained host absent from the last listed roster. Such a host is a positive
@@ -725,6 +780,7 @@ impl From<HostView> for HostViewRecord {
             severity,
             collection,
             metrics,
+            capacities,
             firing_alerts,
             pending_alerts,
             in_current_roster,
@@ -740,6 +796,10 @@ impl From<HostView> for HostViewRecord {
             severity: SeverityRecord::from(severity),
             collection: CollectionHealthRecord::from(collection),
             metrics: metrics.into_iter().map(MetricViewRecord::from).collect(),
+            capacities: capacities
+                .into_iter()
+                .map(CapacityEntryRecord::from)
+                .collect(),
             firing_alerts,
             pending_alerts,
             in_current_roster,
@@ -917,9 +977,9 @@ mod tests {
 
     use chrono::{DateTime, Duration, Utc};
     use pessimal_client_core::{
-        AlertEvidence, AlertPhase, AlertView, CollectionHealth, FailureSource, FleetCounts,
-        FleetView, Freshness, FreshnessInputs, HostView, MetricAvailability, MetricView,
-        PLACEHOLDER_HOST_ID, PollFailure, Severity, metric_facts,
+        AlertEvidence, AlertPhase, AlertView, CapacityView, CollectionHealth, FailureSource,
+        FleetCounts, FleetView, Freshness, FreshnessInputs, HostView, MetricAvailability,
+        MetricView, PLACEHOLDER_HOST_ID, PollFailure, Severity, metric_facts,
     };
     use pessimal_core::{
         Comparator, CoreError, HostId, Liveness, MetricKind, MetricPoint, MetricUnit, OsFamily, Urn,
@@ -1198,6 +1258,26 @@ mod tests {
                 over: Duration::seconds(60),
             },
             metrics: Vec::new(),
+            capacities: vec![
+                CapacityView {
+                    id: "host-a|system.filesystem.usage|mount=/".to_owned(),
+                    kind: MetricKind::FilesystemUsage,
+                    label: Some("/".to_owned()),
+                    used_bytes: 400.0,
+                    total_bytes: Some(500.0),
+                    utilization: Some(0.8),
+                    at: at(-30),
+                },
+                CapacityView {
+                    id: "host-a|system.memory.usage|state=used".to_owned(),
+                    kind: MetricKind::MemoryUsage,
+                    label: None,
+                    used_bytes: 6.0,
+                    total_bytes: None,
+                    utilization: None,
+                    at: at(-30),
+                },
+            ],
             firing_alerts: 0,
             pending_alerts: 1,
             in_current_roster: false,
@@ -1226,6 +1306,15 @@ mod tests {
             }
         );
         assert_eq!(record.os, OsFamilyRecord::Windows);
+
+        // The free figure is computed once, here, so a row and the tooltip beside it cannot
+        // subtract differently -- and a capacity with no total has no free either, rather than a
+        // confident zero.
+        let root = &record.capacities[0];
+        assert_eq!(root.label.as_deref(), Some("/"));
+        assert_eq!(root.capacity.free_bytes, Some(100.0));
+        assert_eq!(record.capacities[1].capacity.free_bytes, None);
+        assert_eq!(record.capacities[1].label, None, "memory is host-wide");
     }
 
     #[test]
