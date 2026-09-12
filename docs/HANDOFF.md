@@ -158,6 +158,41 @@ cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --sample   # 
 cargo run -p pessimal_agent_host -- --config dev/pessimal.dev.toml --check    # validate only
 ```
 
+## Used of total, on both clients
+
+A percentage answers "how full" and not "how much", so memory and filesystem rows now carry the bytes
+beneath the ratio: `79%` with `7.6 GB of 9.7 GB` under it, and the free figure in the macOS tooltip and
+the iOS detail row.
+
+The total is **derived, not reported**: the agent exports `*.usage` in bytes and `*.utilization` as a
+ratio of the same two numbers it divided, so `used / utilization` recovers the total exactly.
+`pessimal_client_core::view::capacities` does it, pairing filesystems by mountpoint and memory
+host-wide, and refuses a total when the ratio is missing or outside `0 < u <= 1` — a denominator from
+a ratio that cannot be one is worse than no denominator. The day an agent exports
+`system.memory.limit` as semconv suggests, this becomes a reading and nothing above it changes.
+
+Two consequences worth knowing:
+
+- `DEFAULT_OVERVIEW_METRICS` went from 5 to 7, because the byte series have to be *fetched* to be
+  read. That is two more series per poll. They are deliberately **not** charted as chips of their own
+  on the fleet row — they appear under their own ratio — so the row count did not change.
+- The iOS detail screen still lists the usage series as rows in their own right. That section's
+  contract is "one row per series gathered", and hiding one because its number also appears above
+  would make an inventory into a summary.
+
+## Where releases go
+
+Nowhere yet, for anything but the iOS app — see
+[`plans/2026-09-12-distribution.md`](plans/2026-09-12-distribution.md), which is a plan and not a
+built thing. The short version: the agent has no published artefact at all, and the macOS app is one
+CI step from having one, since `scripts/notarize-macos-app.sh` already produces a signed, stapled
+`Pessimal.app.zip` that nothing ever uploads. The plan settles GitHub Releases as the single
+distribution point, with Homebrew, mise (`ubi`), nix and Linux tarballs reading from it.
+
+The trap recorded there and worth repeating here: **Apple Silicon will not execute an unsigned binary
+at all**, so an agent cross-compiled on a Linux runner is dead on arrival on an arm64 Mac. The
+Developer ID identity already in Doppler has to sign the CLI too.
+
 ## Running the agent as a service
 
 `scripts/install-agent-launchd.sh` installs the agent as a per-user LaunchAgent on macOS (README has
