@@ -23,7 +23,7 @@ swift_library(
 #
 # `local_provisioning_profile` searches ~/Library/MobileDevice/Provisioning Profiles and matches on
 # the profile's *Name* field, not its filename. Nothing here downloads anything: Xcode populates
-# that directory for development, and `fastlane sigh` does for distribution.
+# that directory for development, and `scripts/asc.py install-profile` does for distribution.
 #
 # The team is the same one every app in the band ships under, so it is written here rather than
 # threaded through a flag. `local_provisioning_profile` treats it as optional -- it only
@@ -51,7 +51,7 @@ xcode_provisioning_profile(
 # surfaces as "no profile found" at build time rather than as anything about naming:
 #   1. the name of the profile in the Apple Developer portal,
 #   2. profile_name here,
-#   3. IOS_APPS[:pessimal][:profile_name] in fastlane/Fastfile.
+#   3. PROFILE_NAME in scripts/release-ios-testflight-buildkite.sh.
 local_provisioning_profile(
     name = "distribution_profile",
     profile_name = "com.lightless-labs.pessimal.ios",
@@ -62,7 +62,7 @@ local_provisioning_profile(
 # =============================================================================
 # Versioning
 # =============================================================================
-# Fed by `--embed_label=<version>.<build>`, which fastlane passes. Without this target the label is
+# Fed by `--embed_label=<version>.<build>`, which scripts/release-ios-testflight-buildkite.sh passes. Without this target the label is
 # inert and CFBundleVersion stays whatever Info.plist says -- so every upload would carry the same
 # build number and App Store Connect would reject the second one.
 apple_bundle_version(

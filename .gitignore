@@ -35,6 +35,3 @@ nohup.out
 # Bazel
 /.bazel/
 
-# fastlane rewrites this on every local run
-fastlane/report.xml
-fastlane/README.md

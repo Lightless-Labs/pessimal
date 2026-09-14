@@ -410,50 +410,8 @@ steps:
       fi
       echo "shipping $$version ($$BUILDKITE_BUILD_NUMBER) from $${BUILDKITE_COMMIT:-unknown commit}"
 
-      # Ruby 3 is required: macOS ships 2.6, where bundler cannot even find fastlane.
-      #
-      # .ruby-version records what the development machine has, and rbenv treats that file as
-      # authoritative -- it refuses to run at all when the named version is absent, which is how the
-      # previous attempt died with "version `3.4.5' is not installed". RBENV_VERSION overrides it with
-      # the newest 3.x the image actually carries. Compiling a Ruby per job to match a patch release
-      # would cost several minutes to buy nothing.
-      if command -v rbenv >/dev/null 2>&1; then
-        export PATH="$$(rbenv root)/shims:$$PATH"
-        installed="$$(rbenv versions --bare 2>/dev/null | grep '^3\.' | sort -V | tail -1 || true)"
-        if [[ -n "$$installed" ]]; then
-          export RBENV_VERSION="$$installed"
-        fi
-      fi
-
-      # Homebrew's Ruby as a second chance, for an image carrying no rbenv 3.x at all.
-      if ! ruby -e 'exit RUBY_VERSION.split(".").first.to_i >= 3' >/dev/null 2>&1; then
-        for candidate in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin; do
-          if [[ -x "$$candidate/ruby" ]]; then
-            export PATH="$$candidate:$$PATH"
-            break
-          fi
-        done
-      fi
-
-      ruby_version="$$(ruby -e 'print RUBY_VERSION')"
-      echo "ruby $$ruby_version"
-      case "$$ruby_version" in
-        3.*) ;;
-        *) echo "fastlane needs Ruby 3; this guest offers only $$ruby_version" >&2; exit 1 ;;
-      esac
-      expected="$$(tr -d '[:space:]' < .ruby-version)"
-      if [[ "$$ruby_version" != "$$expected" ]]; then
-        echo "note: .ruby-version asks for $$expected; this guest has $$ruby_version"
-      fi
-
-      # The selected Ruby may have no bundler. --conservative leaves an existing one alone.
-      gem install bundler --no-document --conservative
-      bundle install --quiet
-
-      # The Doppler service token the plugin injects opens the whole config, and there is no doppler
-      # CLI on the guest. The script reads the handful of secrets the lane needs over the REST API,
-      # unsets the token before fastlane starts, and is equally runnable by hand with the values
-      # already in the environment.
+      # The script reads the secrets over Doppler's REST API, unsets the service token, signs in a
+      # temporary keychain, builds with Bazel and uploads with altool.
       scripts/release-ios-testflight-buildkite.sh "$$version" "$$BUILDKITE_BUILD_NUMBER"
 
       mkdir -p "$$shared_dir/.bazel/bin/clients/apple/ios"
