@@ -13,7 +13,7 @@
 #      unsigned-Pessimal.app.tar into --out, for the step's `artifact_paths`.
 #
 # It signs nothing and holds no credential. The `release-macos` step downloads the three tars into a
-# new guest and signs them there with scripts/release-sign-macos.sh. The build and the signing are in
+# new guest and signs them there with scripts/release-macos-artifacts.sh. The build and the signing are in
 # different steps because a build runs code from every build.rs in the dependency graph, and a process
 # can read its parent's starting environment with `ps -E`. Unexporting a token does not clear that, so
 # the only safe place for the signing token is a guest where nothing is built.
