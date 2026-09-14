@@ -269,7 +269,7 @@ Deferred, with the fact that gates each, so nobody has to rediscover them:
 - **musl**: deferred on DNS/NSS behaviour, not build difficulty.
 
 Unmeasured, and first exercised by the first tag: every release step inside a real guest; Developer
-ID signing, notarisation and stapling through `scripts/release-build-macos.sh`; real publish and
+ID signing, notarisation and stapling through `scripts/release-macos-artifacts.sh`; real publish and
 promote calls against GitHub; the formula installing through `brew`; whether Buildkite's
 `build_branch` access-policy claim matches a tag build; and whether the guest images carry
 `python3` 3.9+, `cc` and Rosetta.
@@ -466,14 +466,14 @@ browser on a physical Mac and launch it.
 
 Then additional query backends (Honeycomb, ClickStack), or the open items below.
 
-1. ~~Read `todos/bazel-toolchain-must-provide-rust-1-95.md` before writing `MODULE.bazel`~~ — done.
+1. ~~Read `todos/003-complete-p2-bazel-toolchain-must-provide-rust-1-95.md` before writing `MODULE.bazel`~~ — done.
    `MODULE.bazel` pins `rules_rust` 0.74.0 and Rust 1.95.0, and the iOS app builds. A
    `macos_application` target is still new ground; macOS ships through
    `scripts/build-macos-app.sh` for now.
 2. ~~Confirm the SigNoz adapter against a live instance~~ — done 2026-09-09, and it found four bugs.
    See [`solutions/backend-ingestion-lag-breaks-liveness.md`](solutions/backend-ingestion-lag-breaks-liveness.md)
    and the fixes either side of it in the log.
-3. ~~Pick up `todos/alert-evidence-staleness-ignores-backend-lag.md`~~ — done, commit `0521efb`:
+3. ~~Pick up `todos/004-complete-p2-alert-evidence-staleness-ignores-backend-lag.md`~~ — done, commit `0521efb`:
    the evidence gate now uses `evidence_horizon()` rather than `max_staleness`.
 4. ~~Run the first TestFlight upload by hand~~ — done: see M7 above.
 

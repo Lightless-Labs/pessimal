@@ -72,7 +72,7 @@ banner, with a settings window for the backend, poll interval and alert rules.
 Built with plain `swiftc` and a hand-assembled bundle, following the sibling project Descartes,
 rather than with Bazel and `rules_apple`. Bazel could not be made to run in the build environment at
 all, and Descartes already ships a notarized macOS app this way. **This departs from the original
-brief**; see [`../../todos/bazel-toolchain-must-provide-rust-1-95.md`](../../todos/bazel-toolchain-must-provide-rust-1-95.md).
+brief**; see [`../../todos/003-complete-p2-bazel-toolchain-must-provide-rust-1-95.md`](../../todos/003-complete-p2-bazel-toolchain-must-provide-rust-1-95.md).
 
 ### M6 — iOS app
 Fleet list, host detail, alert configuration. Shares `PessimalKit` with the menu bar app.
