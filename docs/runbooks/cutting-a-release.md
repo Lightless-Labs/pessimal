@@ -36,76 +36,22 @@ steps pass. Nothing in the pipeline moves a release back.
 
 ## One-time setup
 
-Do these steps before the first tag. The release steps use the same Buildkite secret as TestFlight,
-`DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`. Its Doppler token reads every prd config, so no new Buildkite
-secret or Doppler token is needed.
+Do these steps before the first tag. Every step that reads Doppler uses the Buildkite secret
+`DOPPLER_SERVICE_ACCOUNT_TOKEN`.
 
-### 1. Protect release tags
+### 1. The GitHub token
 
-```sh
-gh api -X POST repos/Lightless-Labs/pessimal/rulesets --input - <<'JSON'
-{
-  "name": "release tags",
-  "target": "tag",
-  "enforcement": "active",
-  "conditions": { "ref_name": { "include": ["refs/tags/v*"], "exclude": [] } },
-  "rules": [ { "type": "creation" }, { "type": "update" }, { "type": "deletion" } ],
-  "bypass_actors": [ { "actor_id": 1, "actor_type": "OrganizationAdmin", "bypass_mode": "always" } ]
-}
-JSON
-```
+The release reads `LL_CLI_RELEASE_GH_TOKEN` from `prd_macos_notarisation`, which inherits it. It needs
+Contents read and write on `pessimal` and `homebrew-tap`.
 
-Only organisation admins can then create, move or delete a `v*` tag. Put all the fields in the JSON
-body: `gh api` sends `-f` fields as query parameters when you use `--input`.
-
-Check it:
-
-```sh
-gh api repos/Lightless-Labs/pessimal/rulesets --jq '.[] | "\(.id) \(.name) \(.target) \(.enforcement)"'
-```
-
-### 2. Create a GitHub token
-
-Create a fine-grained token at <https://github.com/settings/personal-access-tokens/new>:
-
-- Resource owner: `Lightless-Labs`.
-- Repositories: `pessimal` and `homebrew-tap` only.
-- Permissions: Contents, read and write. Nothing else.
-
-The organisation must allow fine-grained tokens. If it needs approval, approve the token.
-
-Check that the token can write to both repositories. This command writes nothing:
-
-```sh
-read -rs GH_TOKEN && export GH_TOKEN      # paste the token and press return
-for repo in pessimal homebrew-tap; do
-  gh api -X POST "repos/Lightless-Labs/$repo/releases/generate-notes" \
-    -f tag_name=v0.0.0-token-check -f target_commitish=main --jq .name
-done
-unset GH_TOKEN
-```
-
-Each line prints `v0.0.0-token-check`. A 403 means the token cannot write. A 404 means it cannot see the
-repository.
-
-### 3. Store the token in Doppler
-
-Put it in `prd_macos_notarisation`, beside the Apple signing secrets, as Descartes does:
-
-```sh
-pbpaste | tr -d '\n' | doppler secrets set GITHUB_TOKEN --silent \
-  --project lightless-labs-pessimal --config prd_macos_notarisation
-pbcopy </dev/null
-```
-
-### 4. Check the Apple secrets
+### 2. Check the Apple secrets
 
 The release reads these from `prd_macos_notarisation`. Nothing has read that config yet:
 
 ```sh
 doppler secrets --only-names --project lightless-labs-pessimal --config prd_macos_notarisation
 # expect: MACOS_DEVELOPER_ID_CERT_P12_BASE64  MACOS_DEVELOPER_ID_CERT_PASSWORD
-#         APPLE_NOTARY_KEY_ID  APPLE_NOTARY_ISSUER_ID  APPLE_NOTARY_KEY_P8_BASE64  GITHUB_TOKEN
+#         APPLE_NOTARY_KEY_ID  APPLE_NOTARY_ISSUER_ID  APPLE_NOTARY_KEY_P8_BASE64  LL_CLI_RELEASE_GH_TOKEN
 ```
 
 ## Cut a release
@@ -197,8 +143,8 @@ already exists.
 | `missing from PATH in the … guest:` | The VM image does not have a tool | Fix the image or the script. |
 | `the ziglang wheel does not match its pinned hash` | A bad download | Retry once. If it happens again, find out why. |
 | `check-glibc-floor: … needs glibc above the 2.28 floor:` | A dependency needs a newer glibc | Fix the dependency. Wipe and cut again. |
-| `configured doppler_token_secret is missing from host env and Buildkite secrets: …` | Buildkite did not give the step `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`. | Check the secret and its access policy, then Retry. |
-| `Doppler read failed for … HTTP 401` | The Doppler token is revoked or wrong | Replace the token in `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`, Retry. |
+| `configured doppler_token_secret is missing from host env and Buildkite secrets: …` | Buildkite did not give the step `DOPPLER_SERVICE_ACCOUNT_TOKEN`. | Check the secret and its access policy, then Retry. |
+| `Doppler read failed for … HTTP 401` | The Doppler token is revoked or wrong | Replace the token in `DOPPLER_SERVICE_ACCOUNT_TOKEN`, Retry. |
 | `no Developer ID Application identity in the imported .p12` | Wrong certificate, or no private key | Fix `prd_macos_notarisation`, Retry. |
 | `notarisation of … is Invalid, not Accepted` | Apple rejected it. The log that follows says why. | Fix the signing. Wipe and cut again. |
 | `answered HTTP 403` or `HTTP 404` on a GitHub call | The GitHub token cannot write, or has expired | Fix the token, update it in Doppler, Retry. |
@@ -249,8 +195,8 @@ changelog entry.
 **Fork pull requests get no CI.** The cluster holds signing credentials, so code from forks must never
 run on it. Keep Buildkite's "build pull requests from forks" setting off.
 
-**One Doppler token.** `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT` reads every prd config, including the Apple
-signing secrets and `GITHUB_TOKEN`. TestFlight, `release-macos`, `release-publish` and `release-promote`
+**One Doppler token.** `DOPPLER_SERVICE_ACCOUNT_TOKEN` is the Doppler service account. It reads the Apple
+signing secrets and `LL_CLI_RELEASE_GH_TOKEN`. TestFlight, `release-macos`, `release-publish` and `release-promote`
 get it. The guard, both builds and both verify steps do not.
 
 **The signing step runs no code that was built.** A build runs code from every dependency's `build.rs`,
@@ -266,11 +212,9 @@ opening.
 in its starting environment, so a `build.rs` in that build could read it with `ps -E`. That step runs on
 every push to `main`.
 
-**The GitHub token can still get code signed.** A fine-grained token acts as the account that made it.
-Today the organisation has one member, and that member is the admin who bypasses the tag ruleset. So
-a leaked release token can push a commit to `main`, which has no ruleset, push a `v*` tag on it, and
-the pipeline signs that code. To close this, make the token from a separate machine account that has
-write access but no admin role, and add a ruleset on `main` that only the owner can bypass.
+**Anyone who can push a `v*` tag can get code signed.** There is no tag protection, because GitHub
+rulesets need a paid plan here. Today only the owner can push. The GitHub release token can push too,
+so a leaked `LL_CLI_RELEASE_GH_TOKEN` can push a commit and a tag, and the pipeline signs that commit.
 
 **tart-ci writes the Doppler token to a file on the host** while a step runs, and deletes it when the
 step ends. If a Buildkite agent crashes during a credentialed step, check the host for leftover

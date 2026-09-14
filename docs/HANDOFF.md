@@ -79,13 +79,12 @@
 - **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party
   packages: ES256 JWTs are signed by shelling out to `openssl`. It replaced sigh's profile fetch and
   worked on first contact where sigh reported only "no matching profile found".
-- **Secrets live in Doppler project `lightless-labs-pessimal`.** Buildkite has one secret for it,
-  `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`, and its token reads every prd config (the owner, 2026-09-14;
-  the pipeline comment that called it a `prd_ios_deployment` token was wrong). TestFlight reads
-  `prd_ios_deployment`. `release-macos`, `release-publish` and `release-promote` read
-  `prd_macos_notarisation`: the Developer ID certificate, the notary key and `GITHUB_TOKEN` (a
-  fine-grained PAT with Contents write on `pessimal` and `homebrew-tap`), as Descartes keeps them.
-  `GITHUB_TOKEN` has not been added yet, and nothing has read `prd_macos_notarisation` yet.
+- **Secrets live in Doppler project `lightless-labs-pessimal`**, behind one Doppler service account.
+  Every Buildkite step that reads Doppler uses the cluster secret `DOPPLER_SERVICE_ACCOUNT_TOKEN`.
+  TestFlight reads `prd_ios_deployment`. `release-macos`, `release-publish` and `release-promote` read
+  `prd_macos_notarisation`: the Developer ID certificate, the notary key, and `LL_CLI_RELEASE_GH_TOKEN`
+  (inherited from another config), which publishes releases and updates `homebrew-tap`. Nothing has
+  read `prd_macos_notarisation` yet.
 - **The query credential is still the user's**, taken from the settings screen and kept in the
   Keychain — never baked into the bundle. The *usage-reporting* credential is the one exception, and
   a deliberate reversal of the earlier "no app-runtime config" position, decided with the owner on
@@ -228,19 +227,16 @@ downloads them (artifacts plugin before tart-ci, the hand-off measured on builds
 only Apple's tools and the packager. Nothing that was built runs while the token is present; the
 verify steps run the signed binaries.
 
-**Known gap: the GitHub token can get code signed.** It acts as the account that made it, which today is
-the organisation's only member and the admin who bypasses the tag ruleset. A leaked token can push to
-`main` (no ruleset) and push a `v*` tag, and the pipeline signs that commit. Closing it needs a machine
-account without admin rights to own the token, and a ruleset on `main`. The runbook says so.
+**Known gap: no tag protection.** GitHub rulesets need a paid plan for this organisation, so anyone who
+can push a `v*` tag gets that commit signed. Today that is the owner, and `LL_CLI_RELEASE_GH_TOKEN`.
 
 The release is forward only: a draft, then a prerelease that `/releases/latest` does not point at, then latest once both
 verify steps have downloaded and executed what GitHub serves. The last step renders
 `packaging/homebrew/pessimal-agent.rb.template` into `Lightless-Labs/homebrew-tap`, best effort. If a
 release goes wrong, a human deletes the release and the tag and cuts it again.
 Everything a person does, in order, is in
-[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the tag ruleset, the PAT, the Doppler
-config and tokens, the Buildkite secrets and their access policies, `cog bump --auto`, what the two
-resulting builds look like, how to tell finished from stuck, and how to wipe and re-cut.
+[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the secrets to check, `cog bump --auto`,
+what the two resulting builds look like, how to tell finished from stuck, and how to wipe and re-cut.
 
 It ships four agent tarballs (macOS arm64 and x86_64, Linux arm64 and x86_64 at glibc 2.28),
 `Pessimal-<version>-macos.zip`, and `SHA256SUMS`, exactly as `scripts/release-manifest.sh` lists them.
@@ -448,9 +444,8 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 ## Next up
 
 **The first agent release.** Built and never run. The owner's steps, in order, are in
-[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the tag ruleset first, then the PAT,
-`GITHUB_TOKEN` in `prd_macos_notarisation`, a check that the Apple secrets are there, then
-`cog bump --auto`. No new Buildkite secret or Doppler token is needed. After it promotes, download `Pessimal-<version>-macos.zip` in a
+[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): check that `prd_macos_notarisation` holds the
+Apple secrets and inherits `LL_CLI_RELEASE_GH_TOKEN`, then `cog bump --auto`. After it promotes, download `Pessimal-<version>-macos.zip` in a
 browser on a physical Mac and launch it.
 
 **M8 phase 1 is built.** What remains:

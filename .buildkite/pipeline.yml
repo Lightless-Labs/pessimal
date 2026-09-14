@@ -352,9 +352,9 @@ steps:
           os: "macos"
           always_pull: false
           headless: true
-          # A Doppler token for lightless-labs-pessimal that can read every prd config. This step reads
-          # prd_ios_deployment. The release steps use the same secret.
-          doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          # The Doppler service account token every Doppler read in this pipeline uses. This step reads
+          # lightless-labs-pessimal / prd_ios_deployment.
+          doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN
           # Only what is listed reaches the guest. An omission surfaces as a bare
           # "parameter not set" from the guest's shell under `set -u`, naming the variable but not the
           # reason, so keep this in step with what the command below actually reads.
@@ -441,11 +441,10 @@ steps:
   # (docs/runbooks/cutting-a-release.md); release-publish reuses a draft an earlier
   # attempt left, so that is cheap.
   #
-  # Credentials. release-macos, release-publish and release-promote use the same
-  # Buildkite secret as TestFlight, DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT, a Doppler
-  # token that reads every prd config. They read prd_macos_notarisation, which
-  # holds the Apple signing secrets and GITHUB_TOKEN. The guard, both builds and
-  # both verify steps hold no token.
+  # Credentials. release-macos, release-publish and release-promote use the
+  # Doppler service account token, DOPPLER_SERVICE_ACCOUNT_TOKEN, to read
+  # prd_macos_notarisation: the Apple signing secrets and LL_CLI_RELEASE_GH_TOKEN.
+  # The guard, both builds and both verify steps hold no token.
   #
   # The macOS build and the macOS signing are separate steps, in separate guests.
   # A build runs code from every build.rs, and that code can read the token from
@@ -616,7 +615,7 @@ steps:
           always_pull: false
           headless: true
           # Reads the Apple signing secrets from prd_macos_notarisation. Nothing built runs in this step.
-          doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN
           env:
             - BUILDKITE_TAG
     artifact_paths:
@@ -671,8 +670,8 @@ steps:
           os: "linux"
           always_pull: false
           headless: true
-          # Reads GITHUB_TOKEN from prd_macos_notarisation.
-          doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          # Reads LL_CLI_RELEASE_GH_TOKEN from prd_macos_notarisation.
+          doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN
           # BUILDKITE_COMMIT lets publish refuse a tag that moved after this build started.
           env:
             - BUILDKITE_TAG
@@ -782,8 +781,8 @@ steps:
           os: "linux"
           always_pull: false
           headless: true
-          # Reads GITHUB_TOKEN from prd_macos_notarisation, like release-publish.
-          doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT
+          # Reads LL_CLI_RELEASE_GH_TOKEN from prd_macos_notarisation, like release-publish.
+          doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN
           env:
             - BUILDKITE_TAG
     command: |

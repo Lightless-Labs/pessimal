@@ -23,7 +23,7 @@
 # token.
 #
 # Credentials: the step's tart-ci plugin exports DOPPLER_TOKEN (from the Buildkite secret
-# DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT) into the guest. scripts/lib/macos-signing.sh stops
+# DOPPLER_SERVICE_ACCOUNT_TOKEN) into the guest. scripts/lib/macos-signing.sh stops
 # exporting it the moment it is sourced, reads the five secrets with it, and unsets it. Nothing in
 # this script prints a secret, and nothing in the guest could redact one if it did.
 #
@@ -88,7 +88,7 @@ done
 macos_signing_require_release_tools
 [[ -n "${DOPPLER_TOKEN:-}" ]] || macos_signing_fail "DOPPLER_TOKEN is not set, so the Apple signing" \
   "secrets cannot be read and nothing can be signed. In the Buildkite release-macos step the tart-ci" \
-  "plugin's doppler_token_secret delivers it from the cluster secret DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT;" \
+  "plugin's doppler_token_secret delivers it from the cluster secret DOPPLER_SERVICE_ACCOUNT_TOKEN;" \
   "if it is missing, that secret is absent or its access policy does not cover this build." \
   "There is no unsigned fallback."
 unset MACOS_DEVELOPER_ID_CERT_P12_BASE64 MACOS_DEVELOPER_ID_CERT_PASSWORD \

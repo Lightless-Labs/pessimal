@@ -17,8 +17,8 @@ Why it is shaped this way:
   same API the same way, and its upload and Homebrew blocks are the templates for this file.
 
 * **The credential.** `GITHUB_TOKEN` from the environment, or -- in the Buildkite steps, where the
-  tart-ci plugin injects only `DOPPLER_TOKEN` -- read from Doppler (`lightless-labs-pessimal` /
-  `prd_macos_notarisation`, as Descartes keeps its token beside its notarisation secrets). Both are removed from this process's environment
+  tart-ci plugin injects only `DOPPLER_TOKEN` -- read from Doppler as `LL_CLI_RELEASE_GH_TOKEN` (`lightless-labs-pessimal` / `prd_macos_notarisation`,
+  which inherits it). Both are removed from this process's environment
   before anything else happens, so no child process (release-manifest.sh, release-notes.sh) ever
   inherits either. The token is only ever sent to api.github.com and uploads.github.com; it is never
   forwarded across a redirect, because an asset download answers with a 302 to a signed storage URL
@@ -87,6 +87,7 @@ GITHUB_HOSTS = ("api.github.com", "uploads.github.com")
 DOPPLER_API = "https://api.doppler.com"
 DOPPLER_PROJECT = "lightless-labs-pessimal"
 DOPPLER_CONFIG = "prd_macos_notarisation"
+DOPPLER_SECRET = "LL_CLI_RELEASE_GH_TOKEN"
 
 GUEST_IMAGE = "ci-linux-arm64-rust-bazel"
 USER_AGENT = "pessimal-release/1"
@@ -327,7 +328,7 @@ def fetch_github_token_from_doppler(doppler_token):
     base = DOPPLER_API
     project = os.environ.get("DOPPLER_PROJECT") or DOPPLER_PROJECT
     config = os.environ.get("DOPPLER_CONFIG") or DOPPLER_CONFIG
-    query = urllib.parse.urlencode({"project": project, "config": config, "name": "GITHUB_TOKEN"})
+    query = urllib.parse.urlencode({"project": project, "config": config, "name": DOPPLER_SECRET})
     basic = base64.b64encode((doppler_token + ":").encode()).decode()
     remember_secret(basic)
     request = urllib.request.Request("%s/v3/configs/config/secret?%s" % (base, query),
@@ -338,16 +339,16 @@ def fetch_github_token_from_doppler(doppler_token):
         with opener.open(request, timeout=20) as response:
             payload = json.load(response)
     except urllib.error.HTTPError as exc:
-        die("reading GITHUB_TOKEN from Doppler %s/%s failed: HTTP %d: %s"
-            % (project, config, exc.code, _excerpt(exc.read())))
+        die("reading %s from Doppler %s/%s failed: HTTP %d: %s"
+            % (DOPPLER_SECRET, project, config, exc.code, _excerpt(exc.read())))
     except (OSError, ValueError) as exc:
-        die("reading GITHUB_TOKEN from Doppler %s/%s failed: %s" % (project, config, redact(exc)))
+        die("reading %s from Doppler %s/%s failed: %s" % (DOPPLER_SECRET, project, config, redact(exc)))
     value = payload.get("value") if isinstance(payload, dict) else None
     if isinstance(value, dict):
         value = value.get("computed") or value.get("raw")
     if not isinstance(value, str) or not value:
-        die("Doppler %s/%s returned no value for GITHUB_TOKEN" % (project, config))
-    say("GITHUB_TOKEN read from Doppler %s/%s (the value is not shown)" % (project, config))
+        die("Doppler %s/%s returned no value for %s" % (project, config, DOPPLER_SECRET))
+    say("%s read from Doppler %s/%s (the value is not shown)" % (DOPPLER_SECRET, project, config))
     return value
 
 
@@ -368,7 +369,7 @@ def require_credentials(credentials, action):
     if not credentials[0] and not credentials[1]:
         die("no GITHUB_TOKEN in the environment, and no DOPPLER_TOKEN to read it from Doppler with. "
             "%s writes to GitHub, so it refuses to run without one. In Buildkite the tart-ci plugin's "
-            "`doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT` supplies DOPPLER_TOKEN; by "
+            "`doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN` supplies DOPPLER_TOKEN; by "
             "hand, export GITHUB_TOKEN." % action)
 
 

@@ -16,7 +16,7 @@
 #
 # Where it runs in CI: the `release-macos` step, inside a Tart guest started by the tart-ci plugin on
 # the ci-macos-apple-silicon queue. The plugin resolves the Buildkite secret
-# DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT (a token that reads every prd config) and exports it into the
+# DOPPLER_SERVICE_ACCOUNT_TOKEN (the Doppler service account token) and exports it into the
 # guest as DOPPLER_TOKEN. The guest has no `doppler` CLI and no Buildkite agent token, so nothing in the
 # guest can redact a value from the log after the fact. The only defence is that no secret is ever
 # printed, echoed or traced here, and none may be.
@@ -238,7 +238,7 @@ PY
       macos_signing_fail "$name could not be read: DOPPLER_TOKEN is not set, no logged-in doppler CLI" \
         "supplied it, and it is not in the environment. In the Buildkite release-macos step the tart-ci" \
         "plugin's doppler_token_secret delivers DOPPLER_TOKEN from the cluster secret" \
-        "DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT."
+        "DOPPLER_SERVICE_ACCOUNT_TOKEN."
     fi
     macos_signing_fail "$name is not set (looked in Doppler $project/$config, then the environment)"
   fi
