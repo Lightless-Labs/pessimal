@@ -229,6 +229,7 @@ verify steps run the signed binaries.
 
 **Known gap: no tag protection.** GitHub rulesets need a paid plan for this organisation, so anyone who
 can push a `v*` tag gets that commit signed. Today that is the owner, and `LL_CLI_RELEASE_GH_TOKEN`.
+Tracked in [`todos/001-pending-p2-protect-release-tags.md`](../todos/001-pending-p2-protect-release-tags.md).
 
 The release is forward only: a draft, then a prerelease that `/releases/latest` does not point at, then latest once both
 verify steps have downloaded and executed what GitHub serves. The last step renders

@@ -214,7 +214,8 @@ every push to `main`.
 
 **Anyone who can push a `v*` tag can get code signed.** There is no tag protection, because GitHub
 rulesets need a paid plan here. Today only the owner can push. The GitHub release token can push too,
-so a leaked `LL_CLI_RELEASE_GH_TOKEN` can push a commit and a tag, and the pipeline signs that commit.
+so a leaked `LL_CLI_RELEASE_GH_TOKEN` can push a commit and a tag, and the pipeline signs that commit. See
+[`todos/001-pending-p2-protect-release-tags.md`](../../todos/001-pending-p2-protect-release-tags.md).
 
 **tart-ci writes the Doppler token to a file on the host** while a step runs, and deletes it when the
 step ends. If a Buildkite agent crashes during a credentialed step, check the host for leftover
