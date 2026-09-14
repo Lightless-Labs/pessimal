@@ -38,11 +38,12 @@ Add a ruleset that lets only the owner create `refs/tags/v*`, and one that prote
 
 ### Option B: Require a signed tag in release-guard
 
-Make `cog bump` create an annotated, signed tag, and make `release-guard` stop unless the tag is signed
-by an allowed key (`git verify-tag` against a committed allowed-signers file).
+Make the `release-cut` step create an annotated, signed tag, and make `release-guard` stop unless the tag
+is signed by an allowed key (`git verify-tag` against a committed allowed-signers file).
 
-- **Pros:** free. A leaked GitHub token cannot sign a tag.
-- **Cons:** `cog` makes lightweight tags today, and the runbook's re-cut commands would change. Nobody has
+- **Pros:** free. A leaked GitHub token alone cannot sign a tag.
+- **Cons:** CI cuts releases, so the signing key must live in Doppler, beside `LL_CLI_RELEASE_GH_TOKEN`.
+  A leaked `DOPPLER_SERVICE_ACCOUNT_TOKEN` gives both. `cog` makes lightweight tags today. Nobody has
   checked what Buildkite reports for an annotated tag.
 
 ### Option C: A separate account for the release token
@@ -54,19 +55,21 @@ Create `LL_CLI_RELEASE_GH_TOKEN` from a machine account with write access and no
 
 ## Recommended Action
 
-Option B now, because it costs nothing. Option A and C if the organisation moves to a paid plan.
+Option B still helps against a leaked GitHub token, but not against a leaked Doppler token. Do it if
+that difference is worth the work. Option A and C if the organisation moves to a paid plan.
 
 ## Technical Details
 
 - `.buildkite/pipeline.yml`: the release steps (`if: build.tag != null && build.tag =~ /^v…$/`)
 - `scripts/release-guard.sh`: the tag checks
+- `scripts/release-cut.sh`: the CI step that runs `cog bump --auto` and pushes the tag
 - `cog.toml`: `post_bump_hooks` push the tag
 - `docs/runbooks/cutting-a-release.md`: the Security section and the re-cut commands
 
 ## Acceptance Criteria
 
 - [ ] A `v*` tag pushed with `LL_CLI_RELEASE_GH_TOKEN` alone does not produce a signed release.
-- [ ] A tag the owner cuts with `cog bump --auto` still releases.
+- [ ] A tag that `release-cut` makes still releases.
 - [ ] The runbook's Security section says what protects release tags.
 
 ## Work Log
@@ -75,6 +78,7 @@ Option B now, because it costs nothing. Option A and C if the organisation moves
 
 - Tag ruleset dropped from the release setup: GitHub plan does not allow it.
 - Gap written into the runbook's Security section and `docs/HANDOFF.md`.
+- CI now cuts releases (`release-cut`), so Option B's signing key would have to live in Doppler.
 
 ## Resources
 
