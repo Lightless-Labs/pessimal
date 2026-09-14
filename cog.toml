@@ -2,8 +2,36 @@ tag_prefix = "v"
 branch_whitelist = ["main"]
 ignore_merge_commits = true
 
-pre_bump_hooks = []
-post_bump_hooks = []
+# The ios-testflight step in `.buildkite/pipeline.yml` reads the marketing version from
+# [workspace.package] and says "`cog bump` moves it". That was never true with empty hooks: cog writes
+# the changelog, the commit and the tag, and nothing taught it about Cargo.toml. This hook is what makes
+# that sentence true. The `release-guard` Buildkite step (scripts/release-guard.sh) refuses a tag whose
+# digits do not equal [workspace.package] version, so the two cannot drift apart quietly any more.
+#
+# {{version}} expands without the tag_prefix, which is why the tag push below spells the `v`
+# literally ({{version_tag}} is the prefixed equivalent, and with tag_prefix = "v" they agree).
+pre_bump_hooks = ["./scripts/set-workspace-version.sh {{version}}"]
+
+# Two pushes rather than one `git push --follow-tags`, in this order deliberately: main lands first,
+# then the tag. The order is load-bearing, not tidy: `release-guard` fetches main from GitHub and
+# refuses a tag whose commit is not an ancestor of it, so a tag that reached GitHub before its commit
+# would race its own bump.
+#
+# Each push starts its own Buildkite build. The main build ships the bump commit to TestFlight, which
+# is correct -- it carries the new marketing version -- and the tag build is the release. Both want the
+# single macOS guest slot, so the tag build's release-macos step queues behind TestFlight; a long wait
+# there is that queue, not a hang. docs/runbooks/cutting-a-release.md says the same.
+#
+# `--follow-tags` would not merely reorder things, it would ship nothing: it pushes only annotated
+# tags, and cog writes a lightweight one. Measured 2026-09-13 with cocogitto 7.0.0 against a
+# throwaway remote -- `git cat-file -t v0.1.0` says `commit`, and `git push --follow-tags` moved
+# main and left the tag behind, so no release would ever have started.
+#
+# Both pushes authenticate, so the agent must be loaded before `cog bump` -- after a reboot the
+# socket survives but the agent comes back empty:
+#   export SSH_AUTH_SOCK=~/.ssh/agent.sock && ssh-add --apple-load-keychain
+# docs/runbooks/cutting-a-release.md makes that the first line of the release procedure.
+post_bump_hooks = ["git push origin main", "git push origin v{{version}}"]
 
 [changelog]
 path = "CHANGELOG.md"

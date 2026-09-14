@@ -78,9 +78,10 @@ yet — do not add build instructions for them to the docs before they work.
 
 ## Cautions
 
-- **Do not use self-hosted runners for fork PRs.** This is a public repo. PR CI runs on hosted
-  `macos-15` (free and unmetered for public repos); the self-hosted `getmac-tahoe` runner is only
-  used for pushes to `main` and for release workflows, which forks cannot trigger.
+- **Pull requests from forks get no CI at all, by design. Never enable Buildkite fork builds.** This
+  is a public repo, and all of its CI and releases run on the self-hosted Buildkite cluster
+  (`.buildkite/pipeline.yml`), which also holds signing credentials. A stranger's code must never
+  execute there, so the pipeline's `build_pull_request_forks` setting stays off.
 - The bindgen CLI in `tools/uniffi/` and the `uniffi` runtime crate must stay on the same version.
   Both take it from `[workspace.dependencies]`; a mismatch surfaces as an opaque API-checksum panic
   at app runtime, not at build time.

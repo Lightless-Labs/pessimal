@@ -1,4 +1,4 @@
-# Pessimal on the self-hosted Apple silicon mini, through Tart guests.
+# Pessimal's CI and its releases, on the self-hosted Apple silicon mini, through Tart guests.
 #
 # The shape is Descartes' (lightless-labs/public/descartes/.buildkite/pipeline.yml), because it is the
 # one verified on this cluster: the same pinned tart-ci plugin, the same two images, the same
@@ -6,17 +6,28 @@
 # is recorded in the band's cookbook,
 # docs/solutions/ci-cd-patterns/2026-09-10-buildkite-self-hosted-ios-cicd-cookbook.md.
 #
-# GitHub Actions keeps the cross-platform matrix (Linux, macOS, Windows) and the collector smoke test,
-# which hosted runners do for free on a public repo. Buildkite exists here for what hosted runners
-# cannot do: build the iOS app and sign it.
+# This file is the whole of the project's automation; nothing else builds, tests or releases it. Every
+# step's `if:` says which of three kinds of build it belongs to:
 #
-# Every push to main that passes verification ships to TestFlight. There is no tag to cut and no
-# button to press, which is the point -- a release that needs a human to remember it is a release that
-# drifts behind main. `[skip release]` in the commit message opts a push out.
+#   * A push or a pull request (`build.tag == null`) is verified: the Rust workspace on Linux, the OTLP
+#     export against a real collector, the iOS app, and the macOS menu bar app with its bindings and
+#     bundle checks. Linux and macOS on Apple silicon are what this cluster can run, so they are what
+#     is tested. Windows is not tested anywhere.
+#   * A push to main that passes verification ships to TestFlight. There is no tag to cut and no
+#     button to press, which is the point -- a release that needs a human to remember it is a release
+#     that drifts behind main. `[skip release]` in the commit message opts a push out.
+#   * A `vMAJOR.MINOR.PATCH` tag releases the host agent and the menu bar app, and does nothing else.
+#     That chain is the last section of this file.
+#
+# Pull requests from forks get no CI at all, and that is deliberate. The pipeline's setting to build
+# pull requests from forked repositories (`build_pull_request_forks`) is off and must stay off: the
+# repository is public, and a stranger's code must never execute on a self-hosted machine that holds
+# signing credentials.
 
 steps:
   - label: ":linux: Rust workspace"
     key: rust-linux
+    if: build.tag == null
     retry:
       automatic:
         # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
@@ -39,11 +50,25 @@ steps:
           os: "linux"
           always_pull: false
           headless: true
+          # Only what is listed reaches the guest. Buildkite documents BUILDKITE_PULL_REQUEST as set on
+          # every build, to "false" when it is not a pull request; were it ever unset on the host, tart-ci
+          # fails the step before the command runs, which is loud rather than a skipped check.
+          env:
+            - BUILDKITE_PULL_REQUEST
     command: |
       set -euo pipefail
 
       if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
         export HOME=/home/admin
+      fi
+
+      # Conventional commits, on pull requests only: a push to main has no pull-request range to check.
+      # It runs here, in the shared checkout and before the rsync below, because it reads history and
+      # that rsync excludes .git. The gate lives in this command rather than in the script, so it is
+      # visible where it is decided, and `:?` makes a variable missing from the allowlist fail the step
+      # instead of quietly skipping the check.
+      if [[ "$${BUILDKITE_PULL_REQUEST:?not forwarded to the guest; add it to the tart-ci env allowlist}" != "false" ]]; then
+        scripts/ci-check-commits.sh
       fi
 
       # Out of the shared mount before building. Cargo and Bazel both write heavily, and the mount is
@@ -61,9 +86,9 @@ steps:
       # Gated on the measured version rather than installed unconditionally. The Linux guest's rustup
       # lives in a root-owned /opt/rustup that the job user cannot write to, so an unconditional
       # install fails there with EACCES -- and that image already ships a new enough toolchain, so the
-      # gate means it is never attempted. `stable` rather than a pinned version, to match what
-      # .github/workflows/ci.yml installs: the workspace tracks stable on purpose, and pinning here
-      # would quietly stop CI testing what GitHub tests.
+      # gate means it is never attempted. `stable` rather than a pinned version: the workspace tracks
+      # stable on purpose, and a pin here would quietly stop CI testing the compiler contributors build
+      # with.
       msrv="1.95"
       have="$$(cargo -V | awk '{print $$2}')"
       echo "cargo reports $$have; MSRV is $$msrv"
@@ -81,8 +106,69 @@ steps:
       cargo clippy --workspace --all-targets -- -D warnings
       cargo test --workspace --locked
 
+      # The host collector is the part most likely to differ per platform, so prove the agent can read
+      # this guest's host rather than only compile for it.
+      cargo run -p pessimal_agent_host -- --config pessimal.example.toml --sample
+
+  - label: ":satellite: OTLP export smoke"
+    key: otlp-export-smoke
+    if: build.tag == null
+    retry:
+      automatic:
+        # A fresh Tart guest fetches every external archive -- crates and the collector alike -- so an
+        # upstream 500 is routine. A real export failure also exits 1 and fails every attempt the same
+        # way; the rest are the guest dying under us.
+        - exit_status: 1
+          limit: 2
+        - exit_status: -1  # agent lost, VM never came up
+          limit: 2
+        - exit_status: 255
+          limit: 2
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      work_dir="$$HOME/pessimal-smoke-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # The same MSRV gate as the Rust workspace step, for the same reasons; its comment has them.
+      msrv="1.95"
+      have="$$(cargo -V | awk '{print $$2}')"
+      echo "cargo reports $$have; MSRV is $$msrv"
+      if [[ "$$(printf '%s\n%s\n' "$$msrv" "$$have" | sort -V | head -1)" != "$$msrv" ]]; then
+        echo "the guest toolchain is behind MSRV; installing stable"
+        if [[ ! -w "$${RUSTUP_HOME:-$$HOME/.rustup}" ]]; then
+          export RUSTUP_HOME="$$HOME/.rustup-ci"
+        fi
+        rustup toolchain install stable --profile minimal
+        rustup default stable
+        cargo -V
+      fi
+
+      # The smoke script needs the debug agent and deliberately does not build it. It fetches a pinned,
+      # hash-checked otelcol-contrib (the guests cannot run Docker), exports to it over gRPC and over
+      # HTTP/protobuf, and stops the collector on every exit path.
+      cargo build -p pessimal_agent_host
+      scripts/ci-otlp-export-smoke.sh
+
   - label: ":bazel: iOS app"
     key: ios-simulator
+    if: build.tag == null
     retry:
       automatic:
         # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
@@ -138,6 +224,7 @@ steps:
 
   - label: ":apple: macOS menu bar app"
     key: macos-bundle
+    if: build.tag == null
     retry:
       automatic:
         # A fresh Tart guest fetches every external archive, so an upstream 500 is routine.
@@ -179,9 +266,9 @@ steps:
       # Gated on the measured version rather than installed unconditionally. The Linux guest's rustup
       # lives in a root-owned /opt/rustup that the job user cannot write to, so an unconditional
       # install fails there with EACCES -- and that image already ships a new enough toolchain, so the
-      # gate means it is never attempted. `stable` rather than a pinned version, to match what
-      # .github/workflows/ci.yml installs: the workspace tracks stable on purpose, and pinning here
-      # would quietly stop CI testing what GitHub tests.
+      # gate means it is never attempted. `stable` rather than a pinned version: the workspace tracks
+      # stable on purpose, and a pin here would quietly stop CI testing the compiler contributors build
+      # with.
       msrv="1.95"
       have="$$(cargo -V | awk '{print $$2}')"
       echo "cargo reports $$have; MSRV is $$msrv"
@@ -196,23 +283,38 @@ steps:
       fi
       cargo --version
 
-      scripts/build-macos-app.sh
+      # The committed Swift bindings must be exactly what tools/uniffi/regen.sh generates now. First, so
+      # stale bindings fail with a message that names them rather than as Swift errors further down.
+      scripts/ci-check-bindings.sh
       scripts/swift-smoke.sh
 
+      # The agent's host collector differs per platform; prove it reads a macOS host.
+      cargo run -p pessimal_agent_host -- --config pessimal.example.toml --sample
+      # The workspace tests on macOS too: the Linux step cannot see macOS-only code paths.
+      cargo test --workspace --locked
+
+      # The bundle last among the builds. build-macos-app.sh is the one cargo build here that sets
+      # MACOSX_DEPLOYMENT_TARGET, and it fails loudly if its link picks up C objects compiled for a
+      # newer macOS -- so every build for this guest's own target happens before it, and the target
+      # changes once.
+      scripts/build-macos-app.sh
+      scripts/ci-check-macos-bundle.sh
+
   # ---------------------------------------------------------------------------
-  # Release. Every push to main that passes the three steps above ships to
-  # TestFlight. No tag, no button.
+  # TestFlight. Every push to main that passes the three steps it depends on
+  # ships to TestFlight. No tag, no button.
   #
   # It used to be gated on a `pessimal-ios-v*` tag behind a block step, which was
   # scaffolding from before the path had ever completed. Worse, it made the release
-  # the *only* step a tag build ran -- the three above are what a tag build skipped
+  # the *only* step a tag build ran -- the three it depends on are what a tag build skipped
   # -- so the signed upload depended on nothing having been verified. `depends_on`
   # below is the fix, and it is the real reason to do this rather than mere
   # convenience.
   #
-  # Tags are now unused here, and deliberately left free for an App Store
-  # submission path, which is a different decision from shipping to internal
-  # testers and should stay a deliberate act.
+  # This step never runs on a tag. `vMAJOR.MINOR.PATCH` tags release the agent
+  # (the section after this one); `pessimal-ios-v*` tags stay unused, deliberately
+  # left free for an App Store submission path, which is a different decision from
+  # shipping to internal testers and should stay a deliberate act.
   # ---------------------------------------------------------------------------
   - label: ":rocket: iOS TestFlight"
     key: ios-testflight
@@ -357,3 +459,396 @@ steps:
       mkdir -p "$$shared_dir/.bazel/bin/clients/apple/ios"
       rsync -a ".bazel/bin/clients/apple/ios/Pessimal.ipa" \
         "$$shared_dir/.bazel/bin/clients/apple/ios/Pessimal.ipa"
+
+  # ---------------------------------------------------------------------------
+  # The agent release. A `vMAJOR.MINOR.PATCH` tag runs these eight steps and
+  # nothing else:
+  #
+  #   release-guard
+  #     -> release-linux + (release-macos-build -> release-macos)
+  #     -> release-publish
+  #     -> release-verify-linux + release-verify-macos
+  #     -> release-promote
+  #
+  # The tag comes from `cog bump`, which pushes main and then the tag, so it
+  # starts two builds: main's ships the bump commit to TestFlight, the tag's
+  # releases. Both want the single macOS slot, so release-macos-build usually
+  # queues behind TestFlight. A long wait before it starts is that queue, not a hang.
+  #
+  # Forward only: draft, then prerelease, then latest. release-publish leaves a
+  # prerelease, which /releases/latest does not point at; release-promote makes it
+  # latest only after both verify steps have downloaded and run what GitHub
+  # actually serves. Nothing here un-publishes. When a release goes wrong, a human
+  # deletes the GitHub release and the tag and cuts it again
+  # (docs/runbooks/cutting-a-release.md); release-publish reuses a draft an earlier
+  # attempt left, so that is cheap.
+  #
+  # One Doppler service token per step, and only in the steps that need one.
+  # release-macos reads prd_macos_notarisation: the Developer ID certificate and
+  # the notary key. release-publish and release-promote read prd_github_release,
+  # which holds GITHUB_TOKEN and nothing else. Two configs, so that no single read
+  # yields both "sign code as Lightless Labs" and "push to the repository". The
+  # guard, both builds and both verify steps hold no credential at all.
+  #
+  # The macOS build and the macOS signing are separate steps, in separate guests.
+  # A build runs code from every build.rs, and that code can read the token from
+  # its parent's starting environment with `ps -E`; `export -n` does not clear it.
+  # So the build step has no token, and the signing step runs nothing that was built.
+  #
+  # Files cross between steps only as Buildkite artifacts, and only on the host:
+  # a guest holds no agent token, so it can neither upload nor download. A
+  # producer rsyncs its finished assets back into the shared checkout for
+  # `artifact_paths`, after its script has succeeded -- a script that fails never
+  # reaches that line, so a failed attempt uploads nothing. The consumer lists the
+  # artifacts plugin BEFORE tart-ci, so the plugin's pre-command hook has
+  # downloaded into the checkout before tart-ci starts the guest on it. Measured on
+  # this cluster on 2026-09-13: build #41 found an uploaded file inside the
+  # consuming guest that way, and build #42, identical but without the plugin, did
+  # not.
+  #
+  # Every release step lists BUILDKITE_TAG in the tart-ci env allowlist. The guest
+  # sees only what is listed, and a script reading an empty tag cannot say why.
+  #
+  # The `if:` is Descartes' release condition character for character, single `$`
+  # included, which is the form that pipeline releases with. It does not match
+  # `pessimal-ios-v*`.
+  #
+  # No automatic retry on any of these, unlike the steps above. A release step
+  # that exits non-zero is a check that said no, and the answer to that is a human
+  # reading why; Buildkite's manual retry is there when the guest itself died.
+  # ---------------------------------------------------------------------------
+  - label: ":lock: Release guard"
+    key: release-guard
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          # BUILDKITE_COMMIT lets the guard refuse a tag that moved after this build started.
+          env:
+            - BUILDKITE_TAG
+            - BUILDKITE_COMMIT
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      work_dir="$$HOME/pessimal-release-guard-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # Refuses, saying which, unless the tag's digits equal [workspace.package] version, the tagged
+      # commit is on main, and no published release exists for the tag -- all asked of GitHub
+      # anonymously. Nothing is built for a tag until this has passed.
+      scripts/release-guard.sh
+
+  - label: ":linux: Release: Linux agents"
+    key: release-linux
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on: release-guard
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          env:
+            - BUILDKITE_TAG
+    artifact_paths:
+      - ".build/release/dist/linux/*"
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      shared_dir="$$(pwd)"
+      work_dir="$$HOME/pessimal-release-linux-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$shared_dir/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # cargo test, a pinned zig and cargo-zigbuild, both triples through zigbuild at glibc 2.28, the
+      # floor checked on both, the aarch64 binary executed, both packaged. The output directory is
+      # outside the checkout and fresh, because the script refuses one that is not empty.
+      out_dir="$$HOME/pessimal-release-out"
+      rm -rf "$$out_dir"
+      scripts/release-build-linux.sh --out "$$out_dir"
+
+      # Emptied first rather than synced over: rsync skips a file whose size and mtime match, so an
+      # asset left from an earlier run could otherwise sit beside this run's .sha256.
+      rm -rf "$$shared_dir/.build/release/dist/linux"
+      mkdir -p "$$shared_dir/.build/release/dist/linux"
+      rsync -a "$$out_dir/" "$$shared_dir/.build/release/dist/linux/"
+      ls -l "$$shared_dir/.build/release/dist/linux"
+
+  - label: ":apple: Release: build macOS agents and app"
+    key: release-macos-build
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on: release-guard
+    # The single macOS slot every macOS job shares; see the iOS step for why it is one.
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      # No doppler_token_secret. This step runs every build.rs in the dependency graph, and a process can
+      # read its parent's starting environment with `ps -E`, so the signing token must not be here.
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+          env:
+            - BUILDKITE_TAG
+    artifact_paths:
+      - ".build/release/unsigned/macos/*"
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      shared_dir="$$(pwd)"
+      work_dir="$$HOME/pessimal-release-macos-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$shared_dir/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # Builds both agent slices and Pessimal.app, runs them, and writes three unsigned tars.
+      out_dir="$$HOME/pessimal-release-unsigned"
+      rm -rf "$$out_dir"
+      scripts/release-build-macos.sh --out "$$out_dir"
+
+      rm -rf "$$shared_dir/.build/release/unsigned/macos"
+      mkdir -p "$$shared_dir/.build/release/unsigned/macos"
+      rsync -a "$$out_dir/" "$$shared_dir/.build/release/unsigned/macos/"
+      ls -l "$$shared_dir/.build/release/unsigned/macos"
+
+  - label: ":apple: Release: sign macOS agents and app"
+    key: release-macos
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on: release-macos-build
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      # BEFORE tart-ci, so the unsigned tars are in the checkout when the guest starts.
+      - artifacts#v1.9.4:
+          download:
+            - ".build/release/unsigned/macos/*"
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+          # A read-only Doppler service token for lightless-labs-pessimal / prd_macos_notarisation. This
+          # is the only step that can read the Apple signing secrets. Nothing built runs in this step.
+          doppler_token_secret: DOPPLER_PESSIMAL_PRD_MACOS_NOTARISATION
+          env:
+            - BUILDKITE_TAG
+    artifact_paths:
+      - ".build/release/dist/macos/*"
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      shared_dir="$$(pwd)"
+      work_dir="$$HOME/pessimal-release-sign-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$shared_dir/" "$$work_dir/"
+      cd "$$work_dir"
+
+      tag="$${BUILDKITE_TAG:?not forwarded to the guest; add it to the tart-ci env allowlist}"
+
+      # Signs, notarizes and staples, then packages. It builds nothing and runs nothing that was built.
+      out_dir="$$HOME/pessimal-release-signed"
+      rm -rf "$$out_dir"
+      scripts/release-macos-artifacts.sh --version "$${tag#v}" \
+        --in .build/release/unsigned/macos --out "$$out_dir"
+
+      rm -rf "$$shared_dir/.build/release/dist/macos"
+      mkdir -p "$$shared_dir/.build/release/dist/macos"
+      rsync -a "$$out_dir/" "$$shared_dir/.build/release/dist/macos/"
+      ls -l "$$shared_dir/.build/release/dist/macos"
+
+  - label: ":package: Release: publish a prerelease"
+    key: release-publish
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on:
+      - release-linux
+      - release-macos
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      # BEFORE tart-ci: this plugin's pre-command hook downloads both producers' assets into the
+      # checkout, which is the only way files reach a guest. Whatever it downloads, release-github.py
+      # publishes nothing unless the directory holds exactly the release's asset set, each beside the
+      # .sha256 its producer wrote.
+      - artifacts#v1.9.4:
+          download:
+            - ".build/release/dist/linux/*"
+            - ".build/release/dist/macos/*"
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          # A read-only Doppler service token for lightless-labs-pessimal / prd_github_release, which
+          # holds only GITHUB_TOKEN. This step and release-promote are the only ones that carry it.
+          doppler_token_secret: DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE
+          # BUILDKITE_COMMIT lets publish refuse a tag that moved after this build started.
+          env:
+            - BUILDKITE_TAG
+            - BUILDKITE_COMMIT
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      # The publisher is Python, and the guest image's contents were never inventoried.
+      if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+        echo "release-publish needs python3 3.9 or newer, and the ci-linux-arm64-rust-bazel guest has none that runs" >&2
+        exit 1
+      fi
+
+      work_dir="$$HOME/pessimal-release-publish-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # Draft (reused if an earlier attempt left one), upload, download every asset back and check it,
+      # SHA256SUMS from the downloaded bytes, then a prerelease with make_latest "false".
+      python3 scripts/release-github.py publish \
+        --tag "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the tart-ci env allowlist}" \
+        --dist .build/release/dist
+
+  - label: ":linux: Release: verify on Linux"
+    key: release-verify-linux
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on: release-publish
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          env:
+            - BUILDKITE_TAG
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      work_dir="$$HOME/pessimal-release-verify-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # Anonymous downloads from the public URLs, SHA256SUMS checked, the aarch64 Linux binary executed.
+      # It holds no token and unsets any it finds. What this cluster cannot execute -- x86_64 Linux --
+      # it says so, as SKIP, rather than counting it as passed.
+      scripts/verify-release.sh "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the tart-ci env allowlist}"
+
+  - label: ":apple: Release: verify on macOS"
+    key: release-verify-macos
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on: release-publish
+    concurrency: 1
+    concurrency_group: "big-cabbage/tart-ci-macos"
+    agents:
+      queue: "ci-macos-apple-silicon"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-macos-rust-bazel-ios-20260910-v2"
+          os: "macos"
+          always_pull: false
+          headless: true
+          env:
+            - BUILDKITE_TAG
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" ]]; then
+        export HOME=/Users/admin
+      fi
+
+      work_dir="$$HOME/pessimal-release-verify-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # The same anonymous checks from a guest that never saw the signing keychain: signatures,
+      # Gatekeeper's notarisation verdict, the app's stapled ticket, and the arm64 agent executed.
+      scripts/verify-release.sh "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the tart-ci env allowlist}"
+
+  - label: ":rocket: Release: promote to latest"
+    key: release-promote
+    if: build.tag != null && build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    depends_on:
+      - release-verify-linux
+      - release-verify-macos
+    concurrency: 2
+    concurrency_group: "big-cabbage/tart-ci-linux"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          # The same prd_github_release token as release-publish, and nothing else.
+          doppler_token_secret: DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE
+          env:
+            - BUILDKITE_TAG
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+        echo "release-promote needs python3 3.9 or newer, and the ci-linux-arm64-rust-bazel guest has none that runs" >&2
+        exit 1
+      fi
+
+      work_dir="$$HOME/pessimal-release-promote-checkout"
+      rm -rf "$$work_dir" && mkdir -p "$$work_dir"
+      rsync -a --delete --exclude .git "$$(pwd)/" "$$work_dir/"
+      cd "$$work_dir"
+
+      # prerelease -> latest. Then the Homebrew tap's Formula/pessimal-agent.rb, best-effort: by then the
+      # release has shipped, so a tap failure prints the manual bump and does not redden this step.
+      python3 scripts/release-github.py promote \
+        --tag "$${BUILDKITE_TAG:?not forwarded to the guest; add it to the tart-ci env allowlist}"

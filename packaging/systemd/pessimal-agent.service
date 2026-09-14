@@ -1,0 +1,59 @@
+# The Linux service unit shipped inside every *-linux-gnu agent tarball.
+#
+# Install: see the README beside the binary. In short --
+#   /usr/local/bin/pessimal-agent      the binary,            0755
+#   /etc/pessimal/pessimal.toml        the config, no secrets, 0644
+#   /etc/pessimal/pessimal.env         PESSIMAL_API_KEY,       0600 root:root
+#
+# Why the key is in an EnvironmentFile and not in Environment= or the config file: the agent reads
+# PESSIMAL_API_KEY from its environment and has no file-based key input at all
+# (agents/common/pessimal_agent_core/src/config.rs), so the key has to arrive as a variable. An
+# Environment= line would put it in the unit, which means in `systemctl cat` output and in the
+# journal on a failed start. EnvironmentFile= is read by PID 1 *before* it drops privileges, which
+# is what lets the file be 0600 root:root even though the service runs as an unprivileged dynamic
+# user -- the service never opens it.
+#
+# The config file, by contrast, is opened by the service process itself, so it must be readable by
+# the dynamic user: 0644. That is only safe because the key is deliberately not in it.
+
+[Unit]
+Description=Pessimal host telemetry agent
+Documentation=https://github.com/Lightless-Labs/pessimal
+# The agent's first act is to resolve and connect to an OTLP endpoint. Without network-online it
+# starts during boot, fails its first export, and logs an error that looks like a misconfiguration
+# rather than a race. Wants= rather than Requires= because a failed export is not fatal -- the agent
+# keeps beating and retries every interval.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pessimal-agent --config /etc/pessimal/pessimal.toml
+EnvironmentFile=-/etc/pessimal/pessimal.env
+Restart=on-failure
+RestartSec=10
+
+# Hardening. A process that reads host counters out of /proc and /sys and makes outbound HTTPS
+# needs no identity, no writable filesystem and no home directory, so none of this costs a feature.
+# The agent writes no file at all, which is what makes ProtectSystem=strict free rather than a
+# StateDirectory= waiting to be discovered.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+# One cost, expected rather than measured (no systemd host was available when this was written):
+# ProtectHome=yes mounts an inaccessible directory over /home, /root and /run/user, so a mount point
+# under them named in `[collection] filesystems` would report the overmount's numbers, not the real
+# filesystem's. The default list is just "/", which is unaffected. If you monitor a separate /home
+# partition, use ProtectHome=read-only in a drop-in instead.
+ProtectHome=yes
+PrivateTmp=yes
+# AF_INET/AF_INET6 for the OTLP export and DNS, AF_UNIX for the nscd/systemd-resolved socket glibc's
+# NSS may use instead of UDP. AF_NETLINK is deliberately absent even though the binary imports
+# getifaddrs(3), which glibc implements over netlink: sysinfo 0.39 calls it only to fill in MAC and
+# IP addresses, ignores its failure, and takes the interface list and byte counters the agent exports
+# from /sys/class/net. So denying it loses nothing the agent reports today. Add AF_NETLINK if the
+# agent ever starts exporting interface addresses -- the failure would otherwise be silent.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

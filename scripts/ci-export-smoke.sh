@@ -22,19 +22,20 @@ interval_seconds = 2
 timeout_seconds = 1
 TOML
 
-PESSIMAL_LOG=debug timeout 12 ./target/debug/pessimal-agent --config "$log.toml" > "$log" 2>&1 || true
+# 30 s, not less: on a loaded machine the agent can take several seconds to open its first connection.
+PESSIMAL_LOG=debug timeout 30 ./target/debug/pessimal-agent --config "$log.toml" > "$log" 2>&1 || true
 
 ok=$(grep -c 'export_result="Ok' "$log" || true)
 err=$(grep -c 'export_result="Err' "$log" || true)
 
 if [ "$err" -ne 0 ]; then
-  echo "::error::$protocol: $err export(s) failed"
+  echo "error: $protocol: $err export(s) failed" >&2
   cat "$log"
   exit 1
 fi
 
 if [ "$ok" -eq 0 ]; then
-  echo "::error::$protocol: no export ran at all in 12s"
+  echo "error: $protocol: no export ran at all in 30s" >&2
   cat "$log"
   exit 1
 fi

@@ -73,8 +73,9 @@ build:release --define variant=release
 # CI
 # =============================================================================
 build:ci --config=ci-base
-# Signing is unavailable on a hosted runner: no certificate, and no provisioning profile in
-# ~/Library/MobileDevice. `ci=true` is what tells the app target to ask for neither.
+# Signing is unavailable in the `:bazel: iOS app` Buildkite step's guest: it holds no certificate
+# and no provisioning profile in ~/Library/MobileDevice. `ci=true` is what tells the app target to
+# ask for neither.
 build:ci --define ci=true
 build:ci --config=ios_sim
 # Undoes the development machine's memory cap. That 0.4 exists because this repo shares an 11 GB VM

@@ -9,8 +9,8 @@
 # .swift means your Rust change silently has no effect, because the build compiles the committed
 # file rather than your code.
 #
-# CI runs this and then `git diff --exit-code`, so a forgotten regeneration fails Rust CI rather
-# than the iOS build.
+# CI runs this in the `:apple: macOS menu bar app` step through scripts/ci-check-bindings.sh, which
+# compares the result with the committed files. A forgotten regeneration fails that step.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

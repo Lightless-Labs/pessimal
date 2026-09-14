@@ -26,14 +26,16 @@ UniFFI bridge.
 ## Milestones
 
 ### M0 — Scaffold and CI ✅
-Repo layout, Cargo workspace, licence, conventional commits. CI builds and tests the Rust tree on
-`ubuntu-latest`, `macos-15`, and `windows-latest`, lints once on Linux, and runs an OTLP export
-smoke test over both protocols against a real collector service container.
+Repo layout, Cargo workspace, licence, conventional commits.
 
-PR CI runs on hosted runners only. Standard hosted runners are free and unmetered for public
-repositories, so this costs nothing, and it means a fork's pull request can never execute on the
-owner's machine. The self-hosted `getmac-tahoe` runner is reserved for pushes to `main` and for
-release workflows, which forks cannot trigger.
+**The CI half of this milestone is superseded, 2026-09-14.** As first built, CI ran on GitHub's hosted
+runners: the Rust tree on Linux, macOS and Windows, a lint, and an OTLP export smoke test against a
+collector container. The repository owner has since ruled out GitHub Actions entirely, and that CI
+is deleted. All CI and every release now run on Buildkite, on the self-hosted Apple silicon cluster,
+through Tart guests: see [`.buildkite/pipeline.yml`](../../.buildkite/pipeline.yml) and, for releases,
+[`../runbooks/cutting-a-release.md`](../runbooks/cutting-a-release.md). Its checks cover Linux (arm64)
+and macOS (Apple silicon); Windows is tested nowhere. Pull requests from forks get no CI at all, on
+purpose: fork builds stay disabled so that a stranger's code never runs on the self-hosted machines.
 
 ### M1 — Domain core ✅
 `pessimal_core`: metric identity mapped to OTel semconv names, time ranges and series, liveness

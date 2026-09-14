@@ -7,9 +7,18 @@
 # launches without a network round trip.
 #
 # Usage: scripts/notarize-macos-app.sh [Pessimal.app]
+#
+# The notary submission itself lives in scripts/lib/macos-signing.sh, shared with the bare-binary
+# path. That is not tidying: this script used to trust `notarytool submit --wait`'s exit code, which
+# says the submission reached a terminal state and not that the state was Accepted, and it got away
+# with it only because `stapler staple` below fails when there is no ticket. The bare-binary path has
+# no such accident available to it -- nothing can staple a standalone Mach-O -- so the verdict is now
+# asserted from --output-format json in one place, for both callers.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/macos-signing.sh
+source "$ROOT_DIR/scripts/lib/macos-signing.sh"
 APP_DIR="${1:-${PESSIMAL_MACOS_APP:-$ROOT_DIR/.build/macos/Pessimal.app}}"
 # `dist`, not `release`: the sibling build script's --release names a cargo profile, and a directory
 # called release next to it would read as that rather than as "what gets shipped".
@@ -17,13 +26,10 @@ ARTIFACT_DIR="${PESSIMAL_MACOS_ARTIFACT_DIR:-$ROOT_DIR/.build/macos/dist}"
 ZIP_PATH="$ARTIFACT_DIR/Pessimal.app.zip"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 CODESIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-}"
-KEYCHAIN_PROFILE="${APPLE_NOTARY_KEYCHAIN_PROFILE:-}"
-APPLE_NOTARY_KEY_PATH="${APPLE_NOTARY_KEY_PATH:-}"
-APPLE_NOTARY_KEY_ID="${APPLE_NOTARY_KEY_ID:-}"
-APPLE_NOTARY_ISSUER_ID="${APPLE_NOTARY_ISSUER_ID:-}"
-APPLE_ID="${APPLE_ID:-}"
-APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
-APPLE_APP_SPECIFIC_PASSWORD="${APPLE_APP_SPECIFIC_PASSWORD:-}"
+# The three sets of notary credentials are read straight from the environment by
+# macos_signing_notary_auth_args, which is where the branch selection lives now. All three are still
+# supported; none of them is defaulted here, because a second place to default them is a second place
+# for the two callers to disagree about which one wins.
 
 usage() {
   cat <<'EOF'
@@ -66,6 +72,10 @@ command -v codesign >/dev/null || { echo "error: codesign is required" >&2; exit
 command -v xcrun >/dev/null || { echo "error: xcrun is required" >&2; exit 2; }
 command -v spctl >/dev/null || { echo "error: spctl is required" >&2; exit 2; }
 command -v ditto >/dev/null || { echo "error: ditto is required" >&2; exit 2; }
+# The notary verdict is parsed with python3 and the ticket is attached with stapler; both are checked
+# here, before the bundle is signed, rather than discovered after a submission.
+macos_signing_require_python3
+macos_signing_require_xcrun_tools notarytool stapler
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -82,16 +92,9 @@ codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 
-if [[ -n "$APPLE_NOTARY_KEY_PATH" && -n "$APPLE_NOTARY_KEY_ID" && -n "$APPLE_NOTARY_ISSUER_ID" ]]; then
-  xcrun notarytool submit "$ZIP_PATH" --key "$APPLE_NOTARY_KEY_PATH" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
-elif [[ -n "$KEYCHAIN_PROFILE" ]]; then
-  xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$KEYCHAIN_PROFILE" --wait
-elif [[ -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
-  xcrun notarytool submit "$ZIP_PATH" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
-else
-  echo "error: set APPLE_NOTARY_KEY_PATH/APPLE_NOTARY_KEY_ID/APPLE_NOTARY_ISSUER_ID, APPLE_NOTARY_KEYCHAIN_PROFILE, or APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD" >&2
-  exit 2
-fi
+# Picks the credential branch, submits, and fails loudly on any status but Accepted -- printing
+# `notarytool log <id>` so the reason is in this log rather than one API call away.
+macos_signing_notary_submit "$ZIP_PATH"
 
 xcrun stapler staple "$APP_DIR" || {
   echo "Initial stapling failed; retrying for notary ticket propagation..." >&2
