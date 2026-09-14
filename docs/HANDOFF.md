@@ -231,8 +231,9 @@ verify steps run the signed binaries.
 **Known gap: the GitHub token can get code signed.** It acts as the account that made it, which today is
 the organisation's only member and the admin who bypasses the tag ruleset. A leaked token can push to
 `main` (no ruleset) and push a `v*` tag, and the pipeline signs that commit. Closing it needs a machine
-account without admin rights to own the token, and a ruleset on `main`. The runbook says so. It is forward
-only: a draft, then a prerelease that `/releases/latest` does not point at, then latest once both
+account without admin rights to own the token, and a ruleset on `main`. The runbook says so.
+
+The release is forward only: a draft, then a prerelease that `/releases/latest` does not point at, then latest once both
 verify steps have downloaded and executed what GitHub serves. The last step renders
 `packaging/homebrew/pessimal-agent.rb.template` into `Lightless-Labs/homebrew-tap`, best effort. If a
 release goes wrong, a human deletes the release and the tag and cuts it again.
