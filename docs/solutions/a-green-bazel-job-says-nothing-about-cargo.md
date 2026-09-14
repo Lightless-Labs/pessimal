@@ -1,12 +1,12 @@
-# A green Bazel job says nothing about whether cargo can build on the same machine
+# A passing Bazel build does not mean cargo can build
 
-**Measured:** 2026-09-10, Buildkite builds #2 and #3 on the self-hosted Apple silicon mini.
+**Measured:** 2026-09-10, Buildkite builds #2 and #3, on the self-hosted Apple silicon Mac.
 
 ## What happened
 
-Build #2 on a fresh Tart guest: `bazelisk build --config=ci //clients/apple/ios:Pessimal` passed, the
-ipa was produced, and the uniffi symbols were linked in. The next job on an identical guest ran
-`scripts/build-macos-app.sh`, which drives plain `cargo`, and failed:
+In build #2, `bazelisk build --config=ci //clients/apple/ios:Pessimal` passed on a new Tart VM. It built
+the ipa, with the uniffi symbols linked. The next job used the same VM image and ran
+`scripts/build-macos-app.sh`, which uses plain `cargo`. It failed:
 
 ```
 error: rustc 1.88.0 is not supported by the following packages:
@@ -15,49 +15,41 @@ error: rustc 1.88.0 is not supported by the following packages:
   ...
 ```
 
-Same image, same commit, same minute. The iOS app is *more* Rust than the macOS bundle is — it builds
-the whole workspace through crate_universe — and it compiled without complaint.
+Same image, same commit. The iOS build compiles more Rust than the macOS build, and it passed.
 
 ## Why
 
-`MODULE.bazel` pins its own toolchain:
+`MODULE.bazel` sets its own Rust version:
 
 ```python
 rust.toolchain(edition = "2024", versions = ["1.95.0"], ...)
 ```
 
-Bazel downloads that toolchain and uses it. The guest's rustup is invisible to it. `cargo`, meanwhile,
-uses whatever the image's default toolchain is — 1.88 on `ci-macos-rust-bazel-ios-20260910-v2`.
+Bazel downloads and uses that version. It ignores the VM's rustup. `cargo` uses the image's default
+toolchain, which is 1.88 on `ci-macos-rust-bazel-ios-20260910-v2`.
 
-So the two build systems in this repo disagree about what "the Rust toolchain" means, and only one of
-them is pinned. A rules_rust bump or an image rebake can move either independently.
+So the two build systems can use different Rust versions, and only Bazel's version is fixed. A
+rules_rust update or a new VM image can change either one.
 
-## What this invalidates
+## What this means
 
-**"The Bazel job passes, so the toolchain on that guest is fine"** is not a valid inference, in either
-direction. It is the CI equivalent of the lesson in
-[`backend-ingestion-lag-breaks-liveness.md`](backend-ingestion-lag-breaks-liveness.md): a green check
-that does not exercise the thing you are inferring about tells you nothing about it.
+- A passing Bazel job tells you nothing about the Rust version that cargo uses on the same machine.
+- Only cargo checks the minimum Rust version. `cargo clippy` and `cargo test` catch a regression. The
+  Bazel jobs do not.
+- A `rust-toolchain.toml` fixes cargo's version, but Bazel ignores it. If the two versions must match,
+  something must check that.
 
-Two corollaries worth keeping:
+## The fix
 
-- MSRV is enforced by cargo, not by Bazel. `cargo clippy`/`cargo test` are the only jobs that will
-  ever notice an MSRV regression; the Bazel jobs will keep passing past it.
-- Conversely, a `rust-toolchain.toml` would fix cargo and still not describe what Bazel uses. If the
-  two are meant to agree, that has to be asserted somewhere, because nothing makes it true.
+The pipeline checks the Rust version and installs `stable` only when it is older than 1.95. It installs
+`stable`, not a fixed version, because the workspace follows stable on purpose.
 
-## The fix, and the fix that broke things
-
-The pipeline now measures the toolchain and installs `stable` only when it falls short of MSRV —
-`stable` rather than a pin, because `.github/workflows/ci.yml` installs `stable` and the workspace
-tracks it deliberately.
-
-The first attempt installed unconditionally and turned a green Linux job red:
+The first attempt installed `stable` every time. That broke the Linux job, which had passed before:
 
 ```
 error: could not create temp file /opt/rustup/tmp/...: Permission denied (os error 13)
 ```
 
-That guest's rustup is a root-owned system install the job user cannot write to — and it already
-shipped a new enough toolchain, so it never needed the install. Fixing the job that failed without
-asking what the job that passed depended on simply moved the red.
+On the Linux image, rustup is owned by root, and the job user cannot write to it. That image already had
+a new enough Rust, so it did not need the install. Before you change a job to fix one failure, check
+what the passing jobs depend on.

@@ -69,6 +69,9 @@ yet — do not add build instructions for them to the docs before they work.
   configurable per deployment for backward compatibility.
 - Metric names follow OpenTelemetry system semantic conventions. Pessimal's own instrumentation is
   namespaced `pessimal.agent.*`.
+- Write the README, runbooks and other guides in plain, short sentences. Say what a thing does and
+  how to use it. No metaphors, invented terms, bug stories or self-praise. History goes in
+  `docs/solutions/` and commit messages.
 
 ## Naming Conventions
 

@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-11
+**Updated:** 2026-09-14
 
 ## Current state
 
@@ -24,10 +24,9 @@
   `FleetSession`, per section 4.11 of the client-core design. 6,011 lines, 96 tests, 77 public Swift
   types with no name collisions. Generated bindings are committed at
   `clients/apple/PessimalFFI/Sources/` and CI fails if they go stale.
-- **CI is green on all three platforms**, first run: ubuntu-latest, macos-15, windows-latest, plus
-  the OTLP export smoke test against a real collector and the Swift smoke test. The two risks flagged
-  earlier did not materialise — Windows built `aws-lc-rs` without needing NASM, and the collector
-  service container was reachable.
+- **All CI and every release run on Buildkite, and nowhere else.** GitHub Actions was removed from
+  the project entirely on 2026-09-14; see [CI and releases](#ci-and-releases-buildkite-only) below.
+  Windows is no longer built or tested anywhere.
 - **The whole read path is verified against production.** Agent → OTLP/TLS → SigNoz Cloud → query
   adapter → fold → view, confirmed with a real instance: the roster finds the host, it reads Alive,
   and five metrics arrive with real values. Two opt-in tests keep it honest, both skipped without
@@ -48,10 +47,11 @@
   stores, and the composition root. Its imports of the bindings are guarded with `canImport`, which
   is load-bearing — Bazel compiles `PessimalFFI` as a real module while the macOS script compiles
   everything into one module where it does not exist.
-- **Buildkite builds the Apple clients on the mini.** Pipeline `la-bande-a-bonnot/pessimal`, green
-  end to end for the non-release jobs: the Rust workspace on a Linux guest, the iOS app through Bazel
-  with the uniffi symbols asserted, and the macOS bundle with the Swift smoke test. GitHub Actions
-  keeps the cross-platform matrix, which hosted runners do free on a public repo.
+- **Buildkite builds everything on the mini.** Pipeline `la-bande-a-bonnot/pessimal`, through Tart
+  guests: the Rust workspace on a Linux guest, the OTLP export smoke test, the iOS app through Bazel
+  with the uniffi symbols asserted, and the macOS bundle with the Swift smoke test and the bindings
+  and bundle checks. The steps ported from GitHub Actions on 2026-09-14 have not yet run on the
+  cluster; the first push after that change is their first run.
 - **M7 iOS release — done, and now continuous.** Build `0.1.0.26` reached TestFlight on 2026-09-11
   from the mini and was processed by App Store Connect. **Every push to main that passes the three
   verification steps now ships to TestFlight** — no tag, no block step. `[skip release]` in the commit
@@ -64,21 +64,37 @@
 
   The tag gate it replaced was not merely friction: every verification step was `if: build.tag == null`,
   so a tag build ran the release and *nothing else*, and the signed upload depended on nothing having
-  been verified. The release now `depends_on` all three. Tags are free for a future App Store
-  submission path, which should stay a deliberate act.
+  been verified. The release now `depends_on` all three. `pessimal-ios-v*` tags stay free for a future
+  App Store submission path, which should stay a deliberate act; `vX.Y.Z` tags now release the agent
+  and the menu bar app (below).
 
   The marketing version comes from `[workspace.package] version` in `Cargo.toml` — already the single
   source of truth for every crate — and the build number from `BUILDKITE_BUILD_NUMBER`, which cannot go
-  backwards. **Bumping that version is now the one manual step in a release**, and forgetting it means
-  TestFlight keeps accumulating builds under the same marketing version, which is valid but unhelpful.
+  backwards. **`cog bump --auto` now moves that version**: `cog.toml`'s pre-bump hook,
+  `scripts/set-workspace-version.sh`, rewrites `[workspace.package] version` and `Cargo.lock` into the
+  bump commit (measured in a scratch clone, 2026-09-14). Without a bump, TestFlight keeps accumulating
+  builds under the same marketing version, which is valid but unhelpful.
   What it took is in
   [`solutions/the-ios-release-path-end-to-end.md`](solutions/the-ios-release-path-end-to-end.md).
 - **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party
   packages: ES256 JWTs are signed by shelling out to `openssl`. It replaced sigh's profile fetch and
   worked on first contact where sigh reported only "no matching profile found".
 - **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
-  Pocket Companion: `prd_ios_deployment` for the TestFlight lanes (plus `GH_TOKEN`) and
-  `prd_macos_notarisation` for `scripts/release-macos-app.sh`.
+  Pocket Companion, in three configs. Each is read by one kind of Buildkite step, through the secret
+  that step's tart-ci plugin names in `doppler_token_secret:`:
+  - `prd_ios_deployment`: the TestFlight lanes (plus `GH_TOKEN`), through
+    `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`.
+  - `prd_macos_notarisation`: the Developer ID certificate and the notary key, read by the
+    `release-macos` step through `DOPPLER_PESSIMAL_PRD_MACOS_NOTARISATION`, and by hand by
+    `scripts/release-macos-app.sh`. The TestFlight token cannot read it.
+  - `prd_github_release`: `GITHUB_TOKEN` alone, a fine-grained PAT with Contents write on
+    `Lightless-Labs/pessimal` and `Lightless-Labs/homebrew-tap`, read by `release-publish` and
+    `release-promote` through `DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE`.
+
+  **The last two Buildkite secrets and the `prd_github_release` config were not created by the change
+  that introduced them**, and nothing on the development mini can see whether they exist: it holds no
+  Buildkite token, and its Doppler token is scoped to `home-lab`. Creating them is the owner's, in the
+  runbook's order, after the tag ruleset. The repository had no rulesets on 2026-09-14.
 - **The query credential is still the user's**, taken from the settings screen and kept in the
   Keychain — never baked into the bundle. The *usage-reporting* credential is the one exception, and
   a deliberate reversal of the earlier "no app-runtime config" position, decided with the owner on
@@ -93,7 +109,7 @@
   (instance id, batching, the `PollFailureKind` → `Outcome` mapping), `FleetSession` instrumented
   around `poll` with `flush_usage()` and `usage_diagnostics()`, the Swift consent store and the opt-out
   section on both apps, `PrivacyInfo.xcprivacy`, the `usage_plist` genrule, and the guarded
-  `--action_env` flags in the fastlane lane. The spike and the design are in
+  `--action_env` flags in `scripts/release-ios-testflight-buildkite.sh`. The spike and the design are in
   [`plans/2026-09-11-m8-usage-reporting.md`](plans/2026-09-11-m8-usage-reporting.md).
 
   **Verified live 2026-09-12.** Three `pessimal.client.poll` spans from build **35** are in our SigNoz,
@@ -180,18 +196,112 @@ Two consequences worth knowing:
   contract is "one row per series gathered", and hiding one because its number also appears above
   would make an inventory into a summary.
 
-## Where releases go
+## CI and releases: Buildkite only
 
-Nowhere yet, for anything but the iOS app — see
-[`plans/2026-09-12-distribution.md`](plans/2026-09-12-distribution.md), which is a plan and not a
-built thing. The short version: the agent has no published artefact at all, and the macOS app is one
-CI step from having one, since `scripts/notarize-macos-app.sh` already produces a signed, stapled
-`Pessimal.app.zip` that nothing ever uploads. The plan settles GitHub Releases as the single
-distribution point, with Homebrew, mise (`ubi`), nix and Linux tarballs reading from it.
+**GitHub Actions is gone, entirely, as of 2026-09-14.** The owner's ruling was "Not *a single* use of
+Github Actions. Anywhere." An Actions release workflow had been designed and was dropped, and
+`.github/workflows/ci.yml` was deleted once each check it ran had a home on Buildkite. The project now
+has one automation surface, on hardware it owns, which is also the one that already shipped the iOS
+app. The cost, accepted: Windows is tested nowhere, and fork pull requests get no CI (below).
 
-The trap recorded there and worth repeating here: **Apple Silicon will not execute an unsigned binary
-at all**, so an agent cross-compiled on a Linux runner is dead on arrival on an arm64 Mac. The
-Developer ID identity already in Doppler has to sign the CLI too.
+Where each former `ci.yml` check lives now, all in `.buildkite/pipeline.yml` and all
+`if: build.tag == null`:
+
+| Former check | Now |
+|---|---|
+| fmt, clippy, `cargo test` on Linux | `:linux: Rust workspace`, unchanged, plus `cargo run -p pessimal_agent_host -- --config pessimal.example.toml --sample` |
+| Conventional commits (`cog check`) | `:linux: Rust workspace`, pull-request builds only: `scripts/ci-check-commits.sh`, a pinned, hash-checked cocogitto over `main..HEAD` |
+| OTLP export smoke, gRPC and HTTP/protobuf | New step `:satellite: OTLP export smoke`: `scripts/ci-otlp-export-smoke.sh`, a pinned, hash-checked `otelcol-contrib` 0.160.0 binary, because the guests cannot run Docker |
+| iOS build and uniffi symbols | `:bazel: iOS app`, unchanged |
+| Swift smoke and the macOS bundle | `:apple: macOS menu bar app`, unchanged |
+| Committed bindings match `regen.sh` | `:apple: macOS menu bar app`: `scripts/ci-check-bindings.sh`, which compares against a copy because the guest checkout has no `.git` |
+| Bundle statically linked, no placeholders, lints, `LSUIElement` | `:apple: macOS menu bar app`: `scripts/ci-check-macos-bundle.sh` |
+| `cargo test` and `--sample` on macOS | `:apple: macOS menu bar app` |
+| `cargo test` on Windows | Dropped. The owner does not want Windows tested |
+
+**Pull requests from forks get no CI at all, by design.** The pipeline's `build_pull_request_forks`
+setting is off and must stay off: the repository is public, and a stranger's code must never execute
+on the self-hosted cluster that holds signing credentials. `CLAUDE.md` and `AGENTS.md` carry the same
+rule.
+
+**The release is built, and has never run. No `v*` tag has been pushed.** A `vX.Y.Z` tag runs eight
+tag-only steps and nothing else: `release-guard` → `release-linux` + (`release-macos-build` →
+`release-macos`) → `release-publish` → `release-verify-linux` + `release-verify-macos` →
+`release-promote`.
+
+**The macOS build and signing are separate steps, in separate guests.** A review on 2026-09-14 showed
+that `export -n DOPPLER_TOKEN` does not protect the token: a process keeps its starting environment,
+and a `build.rs` running as the same user can read its parent's with `ps -E`. So
+`release-macos-build` compiles with no token and uploads three unsigned tars, and `release-macos`
+downloads them (artifacts plugin before tart-ci, the hand-off measured on builds #41 and #42) and runs
+only Apple's tools and the packager. Nothing that was built runs while the token is present; the
+verify steps run the signed binaries.
+
+**Known gap: the GitHub token can get code signed.** It acts as the account that made it, which today is
+the organisation's only member and the admin who bypasses the tag ruleset. A leaked token can push to
+`main` (no ruleset) and push a `v*` tag, and the pipeline signs that commit. Closing it needs a machine
+account without admin rights to own the token, and a ruleset on `main`. The runbook says so. It is forward
+only: a draft, then a prerelease that `/releases/latest` does not point at, then latest once both
+verify steps have downloaded and executed what GitHub serves. The last step renders
+`packaging/homebrew/pessimal-agent.rb.template` into `Lightless-Labs/homebrew-tap`, best effort. If a
+release goes wrong, a human deletes the release and the tag and cuts it again.
+Everything a person does, in order, is in
+[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the tag ruleset, the PAT, the Doppler
+config and tokens, the Buildkite secrets and their access policies, `cog bump --auto`, what the two
+resulting builds look like, how to tell finished from stuck, and how to wipe and re-cut.
+
+It ships four agent tarballs (macOS arm64 and x86_64, Linux arm64 and x86_64 at glibc 2.28),
+`Pessimal-<version>-macos.zip`, and `SHA256SUMS`, exactly as `scripts/release-manifest.sh` lists them.
+[`plans/2026-09-12-distribution.md`](plans/2026-09-12-distribution.md) records why, and corrects its
+own earlier wording about notarisation, mise and the glibc floor.
+
+The trap still worth repeating: **Apple Silicon will not execute an unsigned binary at all.** The
+cross-built x86_64 macOS slice comes out of the linker unsigned, unlike the arm64 one, so the release
+signs both slices with the Developer ID identity and checks each.
+
+Deferred, with the fact that gates each, so nobody has to rediscover them:
+
+- **Windows**: a `cargo zigbuild` probe for Windows ran over twenty minutes without finishing, and no
+  machine on the cluster could execute the result.
+- **A cask for the app**: the app is arm64 only, so the cask needs a universal build or
+  `depends_on arch: :arm64`.
+- **A stapled agent** (`.pkg` or `.dmg`): needs a Developer ID Installer certificate. Nobody has
+  confirmed that one exists. To check, list the certificate subjects in the `.p12`:
+
+  ```sh
+  P12PASS="$(doppler secrets get MACOS_DEVELOPER_ID_CERT_PASSWORD --plain \
+    --project lightless-labs-pessimal --config prd_macos_notarisation)" \
+  sh -c 'doppler secrets get MACOS_DEVELOPER_ID_CERT_P12_BASE64 --plain \
+    --project lightless-labs-pessimal --config prd_macos_notarisation \
+    | base64 -D | openssl pkcs12 -nokeys -passin env:P12PASS | grep "^subject="'
+  ```
+- **crates.io**: every internal `[workspace.dependencies]` entry needs a `version` beside its `path`,
+  plus a first manual publish per crate.
+- **musl**: deferred on DNS/NSS behaviour, not build difficulty.
+
+Unmeasured, and first exercised by the first tag: every release step inside a real guest; Developer
+ID signing, notarisation and stapling through `scripts/release-build-macos.sh`; real publish and
+promote calls against GitHub; the formula installing through `brew`; whether Buildkite's
+`build_branch` access-policy claim matches a tag build; and whether the guest images carry
+`python3` 3.9+, `cc` and Rosetta.
+
+## TestFlight without fastlane
+
+**fastlane and Ruby were removed on 2026-09-14**, at the owner's request. `Gemfile`, `Gemfile.lock`,
+`.ruby-version` and `fastlane/` are gone, and so is the Ruby setup in the TestFlight step.
+`scripts/release-ios-testflight-buildkite.sh` now does all of it in shell: it reads the secrets from
+Doppler, installs the profile with `scripts/asc.py`, creates a temporary keychain, imports the WWDR
+intermediates and the distribution certificate, runs `scripts/signing-diagnostics.py`, builds with
+Bazel (with the SigNoz `--action_env` flags when present), deletes the keychain, and uploads with
+`xcrun altool --upload-app` and an App Store Connect key in `API_PRIVATE_KEYS_DIR`.
+
+**The next push to `main` without `[skip release]` is its first real run.** Measured locally: the
+script passes `shellcheck`; the keychain-list parser works on bash 3.2; the profile Name lookup works;
+`altool` 26.10.1 accepts the flags, reads the key directory, exits 1 on an authentication failure, and
+prints `ERROR:`, which the script also checks for. Not measured: signing and uploading in the guest.
+
+One behaviour is gone: fastlane set the TestFlight "What to Test" text to `Pessimal beta build.`.
+`altool` does not set it. Internal testers do not need it. External TestFlight review does.
 
 ## Running the agent as a service
 
@@ -229,7 +339,7 @@ bundle whose Info.plist said `DTPlatformName=iphonesimulator`. It signs nothing,
 — worst of all — *succeeds*, which is how a missing `provisioning_profile` attribute went unnoticed.
 `--ios_multi_cpus=arm64` is the flag that decides it.
 
-**`--embed_label` is inert without an `apple_bundle_version` target.** fastlane passed the label, the
+**`--embed_label` is inert without an `apple_bundle_version` target.** the release passed the label, the
 build succeeded, and `CFBundleVersion` stayed at whatever Info.plist said. The failure would have
 arrived from App Store Connect on the *second* upload, after signing and uploading both times.
 
@@ -347,13 +457,16 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 
 ## Next up
 
+**The first agent release.** Built and never run. The owner's steps, in order, are in
+[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the tag ruleset first, then the PAT,
+the `prd_github_release` config, the two service tokens, the two Buildkite secrets with access
+policies, then `cog bump --auto`. After it promotes, download `Pessimal-<version>-macos.zip` in a
+browser on a physical Mac and launch it.
+
 **M8 phase 1 is built.** What remains:
 
-1. **Rotate the SigNoz keys, then verify live.** Both keys in the kumbaya credentials file are
-   rejected (see M8 above), so this is blocked on a new View key and a new Ingest key from the SigNoz
-   console. `scripts/otlp-trace-probe.py` against the real ingest endpoint answers "does this
-   credential work" in seconds, without a release; then check whether Doppler's
-   `SIGNOZ_OTLP_INGESTION_KEY` needs the same rotation, and look for the trace in the workspace.
+1. ~~Rotate the SigNoz keys, then verify live~~ — done 2026-09-12. Build 35's client spans and this
+   mini's agent metrics are both in SigNoz (see M8 above).
 2. Child spans for `gather`, which needs `pessimal_query_signoz` to hold a sink handle.
 3. **M8 phase 2, the agent.** `[usage_reporting]` in the config, `DO_NOT_TRACK` and `CI` honoured
    (both already implemented in `pessimal_usage::consent`), agent-side span variants, and
@@ -376,8 +489,7 @@ Then additional query backends (Honeycomb, ClickStack), or the open items below.
    and the fixes either side of it in the log.
 3. ~~Pick up `todos/alert-evidence-staleness-ignores-backend-lag.md`~~ — done, commit `0521efb`:
    the evidence gate now uses `evidence_horizon()` rather than `max_staleness`.
-4. Run the first TestFlight upload by hand before writing a workflow for it. The lane loads and the
-   build resolves its profile; what has never happened is the portal fetch and the upload.
+4. ~~Run the first TestFlight upload by hand~~ — done: see M7 above.
 
 One thing the client core cannot check and M4 must not forget: nothing detects an unwired
 `SignozConfig::for_policy`, and the symptom is a healthy fleet silently reading stale or down with

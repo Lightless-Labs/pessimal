@@ -1,48 +1,56 @@
-# A backend's ingestion lag makes healthy hosts read as stale
+# A backend's ingestion lag makes healthy hosts look stale
 
-**Measured:** 2026-09-09 against SigNoz Cloud (eu2).
+**Measured:** 2026-09-09, against SigNoz Cloud (eu2).
 
-## What was measured
+## The measurement
 
-With the agent exporting every 5 seconds and still running, the newest *queryable* heartbeat was
-**88 seconds behind wall clock**. Part of that is bucket quantisation — a 30-second bucket is stamped
-at its start — but most of it is the backend's own ingestion-to-queryable delay.
+The agent exported every 5 seconds and continued to operate. The newest heartbeat that a query could
+find was **88 seconds behind the clock**. Bucket quantisation causes part of this delay, because SigNoz
+gives a 30-second bucket the time at its start. The backend causes most of the delay. It needs time
+before a query can find new data.
 
-That number is not a SigNoz defect. Every columnar metrics backend batches on write. It is a property
-of the read path that Pessimal has to budget for.
+This delay is not a SigNoz defect. All columnar metrics backends write data in batches. The delay is a
+property of the read path, and Pessimal must include it in its calculations.
 
-## Why it matters
+## Why this is important
 
-Two things break, and both were invisible against a local collector, which has effectively zero lag.
+Two things go wrong. A local collector does not show either problem, because its lag is almost zero.
 
-**Liveness misjudges a healthy host.** `LivenessPolicy::default()` is a 30-second beat, stale at 3
-intervals (90s) and down at 5 (150s). A host beating perfectly has a *measured* age of roughly
-`ingestion_lag + quantisation` ≈ 88s + up to 30s, which is already past the stale threshold and
-approaching down. The earlier analysis budgeted one interval for quantisation and nothing for the
-backend, so the margin it reasoned about does not exist.
+**Liveness gives the wrong result for a healthy host.** `LivenessPolicy::default()` sets a 30-second
+beat. A host becomes stale after 3 intervals (90 s) and down after 5 intervals (150 s). A host that
+sends each heartbeat correctly has a *measured* age of about `ingestion_lag + quantisation`. That is
+88 s plus a maximum of 30 s. This age is already more than the stale threshold, and it is near the down
+threshold.
 
-**The roster comes back empty.** `plan_poll`'s host window is derived from the down threshold, so it
-is ~150s wide ending at `now`. With 88s of lag the newest data sits near the far edge of that window
-and intermittently outside it: `list_hosts` returns nothing and the fleet reads as absent, not as
-stale. Observed directly — a 30-minute window found the host, the production window found nothing,
-with the same data.
+The first analysis gave one interval to quantisation and zero to the backend. Thus, the
+safety margin in that analysis did not exist.
 
-## The shape of the fix
+**The roster is empty.** `plan_poll` calculates its host window from the down threshold. The window is
+about 150 s wide, and it ends at `now`. With 88 s of lag, the newest data is near the far edge of the
+window, and sometimes outside it. Then `list_hosts` returns no hosts, and the fleet shows as absent, not
+as stale.
 
-The measurement path has a known, roughly constant delay, so say so rather than pretending `now` is
-observable:
+We saw this directly. With the same data, a 30-minute window found the host, and the
+production window found nothing.
 
-1. A configurable `backend_lag_allowance` on `PollTuning`, defaulting generously (the measured 88s
-   wants real headroom, not a tight fit).
-2. The roster and chart windows widen by it, so the newest data is comfortably inside.
-3. Liveness is judged as of `now - backend_lag_allowance` — the latest instant the backend could
-   have told us about — rather than as of `now`.
+## The fix
 
-Point 3 is the conceptual correction. `LivenessPolicy` is right to compare a heartbeat against an
-instant; the bug was handing it an instant the backend cannot yet have data for.
+The measurement path has a known delay that is almost constant. Pessimal must include this delay. It
+must not act as if a query can see the data at `now`.
 
-## The lesson worth keeping
+1. `PollTuning` has a `backend_lag_allowance` that you can configure. Its default is large, because
+   the measured 88 s needs a good margin.
+2. The roster window and the chart windows increase by this allowance. Thus, the newest data is well
+   inside them.
+3. Liveness uses `now - backend_lag_allowance` as its reference instant, not `now`. This is the latest
+   instant for which the backend can have data.
 
-A collector on loopback exercises neither the certificate path, nor the auth path, nor the lag. All
-three bugs found on the first contact with a real backend were in behaviour that a local collector
-makes look perfect. Verify against something you did not write.
+Item 3 is the important correction. `LivenessPolicy` is correct when it compares a heartbeat to an
+instant. The bug was the instant that Pessimal gave to it: the backend cannot have data for that
+instant yet.
+
+## The lesson
+
+A collector on loopback does not test the certificate path, the authentication path or the lag. The
+first contact with a real backend found three bugs. All three bugs were in behaviour that a local
+collector makes look correct. Always verify against a system that you did not write.

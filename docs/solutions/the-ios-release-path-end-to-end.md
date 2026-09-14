@@ -1,37 +1,42 @@
-# What the first iOS release actually needed
+# What the first iOS release needed
 
-**Shipped:** 2026-09-11. Build `0.1.0.26` of `com.lightless-labs.pessimal.ios`, uploaded from the
-self-hosted mini and processed by App Store Connect.
+**Shipped:** 2026-09-11. Build `0.1.0.26` of `com.lightless-labs.pessimal.ios`. The self-hosted mini
+uploaded it, and App Store Connect processed it.
 
-Eight release attempts. Worth recording not because any single fix was hard, but because of what they
-were: **five were this repo's own configuration, two were Apple-side setup, and one was a design
-mistake of mine that two further attempts failed to find.**
+The release needed eight attempts. No single fix was difficult. This record is useful because of the
+types of failure. **Five failures came from the configuration of this repo. Two came from the Apple
+setup. One came from my design mistake, and two more attempts did not find it.**
 
-## The order they arrived in, and what each cost
+## The failures, in the sequence that they occurred
 
-| # | Failure | Where it came from |
+| # | Failure | Cause |
 |---|---|---|
-| 1 | `rbenv init - bash` → `complete: command not found` | the guest runs commands under zsh |
-| 2 | `rbenv: version '3.4.5' is not installed` | `.ruby-version` names the dev machine's Ruby; rbenv obeys it before any check of ours |
-| 3 | `BUILDKITE_BUILD_NUMBER: parameter not set` | the tart-ci plugin forwards only its `env` allowlist |
-| 4 | `Doppler returned no value for APPLE_TEAM_ID` | a team ID is not a secret and was already in `BUILD.bazel` |
-| 5 | `No matching provisioning profile found` | `sigh`; replaced by a direct App Store Connect call |
-| 6–7 | `Unable to find an identity ... matching the ones in ...mobileprovision` | **two guesses**, each costing a full build |
-| 8 | Five App Store validation complaints at once | the app had no icon, and three Info.plist keys were missing |
+| 1 | `rbenv init - bash` → `complete: command not found` | The guest runs commands in zsh. |
+| 2 | `rbenv: version '3.4.5' is not installed` | `.ruby-version` names the Ruby of the development machine. rbenv obeys that file before our checks run. |
+| 3 | `BUILDKITE_BUILD_NUMBER: parameter not set` | The tart-ci plugin sends only the variables in its `env` allowlist. |
+| 4 | `Doppler returned no value for APPLE_TEAM_ID` | A team ID is not a secret, and `BUILD.bazel` already contained it. |
+| 5 | `No matching provisioning profile found` | `sigh`. A direct App Store Connect call replaced it. |
+| 6–7 | `Unable to find an identity ... matching the ones in ...mobileprovision` | **Two guesses.** Each guess cost a full build. |
+| 8 | Five App Store validation errors at the same time | The app had no icon, and three Info.plist keys were missing. |
 
-## The one worth learning from
+## The important lesson
 
-Failures 6 and 7 were the same failure twice. `rules_apple` signs at the very end, so each hypothesis
-cost ~180 seconds of Bazel, and its message
+Failures 6 and 7 were one failure that occurred two times. `rules_apple` signs at the end of the build.
+Thus, each hypothesis cost about 180 seconds of Bazel. This was the error message:
 
     ERROR: Unable to find an identity on the system matching the ones in ...mobileprovision
 
-covers three unrelated situations without naming any: nothing visible, something visible that the
-profile does not accept, or an identity with no usable private key. Two keychain theories were tried —
-the second, that a Bazel sandbox cannot read `/var/folders`, was committed as a comment asserting it as
-fact. It was never demonstrated and it was not the cause.
+This message covers three different conditions, and it does not tell you which condition occurred:
 
-Writing the diagnostic instead took one attempt and answered it outright:
+- No identity is visible.
+- An identity is visible, but the profile does not accept it.
+- An identity is visible, but it has no private key that codesign can use.
+
+We tried two keychain theories. The second theory was that a Bazel sandbox cannot read `/var/folders`.
+A commit added a comment that stated this theory as a fact. Nobody demonstrated it, and it was not the
+cause.
+
+A diagnostic script found the answer in one attempt:
 
 ```
 profile 'com.lightless-labs.pessimal.ios' accepts 1 certificate(s):
@@ -41,30 +46,32 @@ identities visible: 1
 NO MATCH.
 ```
 
-Two Apple Distribution certificates in one team, differing by an accent. No keychain work could have
-fixed it.
+The team had two Apple Distribution certificates. Their names had one difference: an accent. No change
+to the keychain could fix that.
 
-**The rule:** when a tool's error cannot distinguish the situations it reports, the next thing to write
-is the thing that distinguishes them — not the next hypothesis. The same move had already paid off
-twice in this session before it was applied here: listing Doppler's secret *names* found the missing
-`APPLE_TEAM_ID` on its first run, and `asc.py` printing every visible profile would have found
+**The rule:** a tool can give one error for different conditions. When this occurs, do not write the
+next hypothesis. Write the check that shows which condition occurred. This method was already
+successful two times earlier in the same session. A list of the secret *names* in Doppler found the
+missing `APPLE_TEAM_ID` at its first run. When `asc.py` prints all visible profiles, the output shows
 failure 5 immediately.
 
-## What the pieces are now
+## The components now
 
-- [`scripts/asc.py`](../../scripts/asc.py) — read-only App Store Connect client; ES256 JWTs signed by
-  shelling out to `openssl`, so it needs nothing beyond the system Python 3.9.
-- [`scripts/signing-diagnostics.py`](../../scripts/signing-diagnostics.py) — prints the profile's
-  accepted certificates, the visible identities, and the intersection; runs before Bazel.
-- [`scripts/release-ios-testflight-buildkite.sh`](../../scripts/release-ios-testflight-buildkite.sh) —
-  reads the six secrets over Doppler's REST API and unsets the service token before fastlane starts.
-- [`tools/appicon/render-app-icon.swift`](../../tools/appicon/render-app-icon.swift) — draws the icon at
-  every declared size, so the committed PNGs are diffable and rebuildable.
+- [`scripts/asc.py`](../../scripts/asc.py): a read-only App Store Connect client. It uses `openssl` to
+  sign its ES256 JWTs. Thus, it needs only the system Python 3.9.
+- [`scripts/signing-diagnostics.py`](../../scripts/signing-diagnostics.py): prints the certificates that
+  the profile accepts, the visible identities, and the identities that are in the two lists. It runs
+  before Bazel.
+- [`scripts/release-ios-testflight-buildkite.sh`](../../scripts/release-ios-testflight-buildkite.sh):
+  reads the secrets through the Doppler REST API and removes the service token. Since 2026-09-14 it also
+  signs, builds and uploads without fastlane.
+- [`tools/appicon/render-app-icon.swift`](../../tools/appicon/render-app-icon.swift): draws the icon at
+  each declared size. Thus, you can compare and rebuild the committed PNG files.
 
-The band's cookbook carries the general version of all of this in §6.1–6.4 of
+The band's cookbook has the general version of all this, in §6.1–6.4 of
 `docs/solutions/ci-cd-patterns/2026-09-10-buildkite-self-hosted-ios-cicd-cookbook.md`.
 
-## Still unproven
+## Not yet proved
 
-A TestFlight build that processes is not a build anyone has installed. Tester access, installation and
-on-device behaviour each need their own evidence.
+App Store Connect processed this TestFlight build. That does not prove that a person installed it.
+Tester access, installation and behaviour on a device each need their own evidence.

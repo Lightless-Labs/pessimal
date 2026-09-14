@@ -74,6 +74,9 @@ yet — do not add build instructions for them to the docs before they work.
   namespaced `pessimal.agent.*` for the agents and `pessimal.client.*` for the clients.
 - Usage reporting may only emit attributes on `pessimal_usage::AttributeKey`. That is enforced by the
   types, not by review: nothing in that crate accepts arbitrary text. Do not add an escape hatch.
+- Write the README, runbooks and other guides in plain, short sentences. Say what a thing does and
+  how to use it. No metaphors, invented terms, bug stories or self-praise. History goes in
+  `docs/solutions/` and commit messages.
 
 ## Naming Conventions
 
