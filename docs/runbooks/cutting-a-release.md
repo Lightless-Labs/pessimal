@@ -23,11 +23,11 @@ release-guard ─┬─► release-linux ─────────────
 | `release-guard` | Linux | none | Stops unless the tag matches `[workspace.package] version`, the commit is on `main`, and no published release has this tag. |
 | `release-linux` | Linux | none | Runs `cargo test`, builds both Linux agents for glibc 2.28, runs the arm64 one, and packages both. |
 | `release-macos-build` | macOS | none | Builds both macOS agents and `Pessimal.app`, runs them, and uploads them unsigned. |
-| `release-macos` | macOS | `DOPPLER_PESSIMAL_PRD_MACOS_NOTARISATION` | Signs and notarizes the agents, staples the app, and packages them. It builds and runs nothing. |
-| `release-publish` | Linux | `DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE` | Uploads everything to a draft release, downloads it back, checks the hashes, writes `SHA256SUMS`, and publishes a prerelease. |
+| `release-macos` | macOS | Doppler | Signs and notarizes the agents, staples the app, and packages them. It builds and runs nothing. |
+| `release-publish` | Linux | Doppler | Uploads everything to a draft release, downloads it back, checks the hashes, writes `SHA256SUMS`, and publishes a prerelease. |
 | `release-verify-linux` | Linux | none | Downloads the release without a token, checks it, and runs the arm64 Linux agent. |
 | `release-verify-macos` | macOS | none | The same, plus signatures, notarization, the app's stapled ticket, and the macOS agents. |
-| `release-promote` | Linux | `DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE` | Marks the release as latest and updates the Homebrew formula. |
+| `release-promote` | Linux | Doppler | Marks the release as latest and updates the Homebrew formula. |
 
 A release starts as a draft, becomes a prerelease, and becomes the latest release only after both verify
 steps pass. Nothing in the pipeline moves a release back.
@@ -36,8 +36,9 @@ steps pass. Nothing in the pipeline moves a release back.
 
 ## One-time setup
 
-Do these steps in this order, before the first tag. The ruleset must exist before the signing
-credential does.
+Do these steps before the first tag. The release steps use the same Buildkite secret as TestFlight,
+`DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`. Its Doppler token reads every prd config, so no new Buildkite
+secret or Doppler token is needed.
 
 ### 1. Protect release tags
 
@@ -89,62 +90,23 @@ repository.
 
 ### 3. Store the token in Doppler
 
+Put it in `prd_macos_notarisation`, beside the Apple signing secrets, as Descartes does:
+
 ```sh
-doppler configs create prd_github_release --project lightless-labs-pessimal --environment prd
-
 pbpaste | tr -d '\n' | doppler secrets set GITHUB_TOKEN --silent \
-  --project lightless-labs-pessimal --config prd_github_release
+  --project lightless-labs-pessimal --config prd_macos_notarisation
 pbcopy </dev/null
-
-doppler secrets --only-names --project lightless-labs-pessimal --config prd_github_release
 ```
 
-The last command must list only `GITHUB_TOKEN` and Doppler's own `DOPPLER_*` names. If it lists more,
-they come from the root `prd` config. Move them, or this token can read them too.
+### 4. Check the Apple secrets
 
-Check that the macOS config has its five secrets:
+The release reads these from `prd_macos_notarisation`. Nothing has read that config yet:
 
 ```sh
 doppler secrets --only-names --project lightless-labs-pessimal --config prd_macos_notarisation
-# MACOS_DEVELOPER_ID_CERT_P12_BASE64  MACOS_DEVELOPER_ID_CERT_PASSWORD
-# APPLE_NOTARY_KEY_ID  APPLE_NOTARY_ISSUER_ID  APPLE_NOTARY_KEY_P8_BASE64
+# expect: MACOS_DEVELOPER_ID_CERT_P12_BASE64  MACOS_DEVELOPER_ID_CERT_PASSWORD
+#         APPLE_NOTARY_KEY_ID  APPLE_NOTARY_ISSUER_ID  APPLE_NOTARY_KEY_P8_BASE64  GITHUB_TOKEN
 ```
-
-### 4. Create two read-only Doppler tokens
-
-```sh
-doppler configs tokens create buildkite-release-macos --access read --plain \
-  --project lightless-labs-pessimal --config prd_macos_notarisation | pbcopy
-# paste it into the Buildkite secret in step 5, then:
-pbcopy </dev/null
-
-doppler configs tokens create buildkite-release-github --access read --plain \
-  --project lightless-labs-pessimal --config prd_github_release | pbcopy
-# paste it into the Buildkite secret in step 5, then:
-pbcopy </dev/null
-```
-
-### 5. Add two Buildkite secrets
-
-In Buildkite, go to **Agents → your cluster → Secrets → New Secret**. Use these exact names:
-
-| Secret | Value | Used by |
-|---|---|---|
-| `DOPPLER_PESSIMAL_PRD_MACOS_NOTARISATION` | the `buildkite-release-macos` token | `release-macos` |
-| `DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE` | the `buildkite-release-github` token | `release-publish`, `release-promote` |
-
-On each secret's **Access** tab, restrict it to tag builds of this pipeline. A possible policy:
-
-```yaml
-- pipeline_slug: pessimal
-  build_branch: "v*"
-  cluster_queue_key: ci-macos-apple-silicon   # ci-linux-arm64 for the GitHub secret
-```
-
-Check the syntax in Buildkite's documentation first. Nobody has checked what `build_branch` contains on
-a tag build. `v*` also matches a branch whose name starts with `v`, and the tag ruleset does not protect
-branches, so do not create branches that start with `v`. After the first release, check that a push to
-`main` and a push to a branch named `v-probe` cannot read either secret.
 
 ## Cut a release
 
@@ -235,8 +197,8 @@ already exists.
 | `missing from PATH in the … guest:` | The VM image does not have a tool | Fix the image or the script. |
 | `the ziglang wheel does not match its pinned hash` | A bad download | Retry once. If it happens again, find out why. |
 | `check-glibc-floor: … needs glibc above the 2.28 floor:` | A dependency needs a newer glibc | Fix the dependency. Wipe and cut again. |
-| `configured doppler_token_secret is missing from host env and Buildkite secrets: …` | The Buildkite secret is missing, or its access policy blocks this build. The two look the same. It can come from `release-macos`, `release-publish` or `release-promote`. | Fix the secret or policy, then Retry. |
-| `Doppler read failed for … HTTP 401` | The Doppler token is revoked or wrong | Make a new token, replace the Buildkite secret, Retry. |
+| `configured doppler_token_secret is missing from host env and Buildkite secrets: …` | Buildkite did not give the step `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`. | Check the secret and its access policy, then Retry. |
+| `Doppler read failed for … HTTP 401` | The Doppler token is revoked or wrong | Replace the token in `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`, Retry. |
 | `no Developer ID Application identity in the imported .p12` | Wrong certificate, or no private key | Fix `prd_macos_notarisation`, Retry. |
 | `notarisation of … is Invalid, not Accepted` | Apple rejected it. The log that follows says why. | Fix the signing. Wipe and cut again. |
 | `answered HTTP 403` or `HTTP 404` on a GitHub call | The GitHub token cannot write, or has expired | Fix the token, update it in Doppler, Retry. |
@@ -287,37 +249,35 @@ changelog entry.
 **Fork pull requests get no CI.** The cluster holds signing credentials, so code from forks must never
 run on it. Keep Buildkite's "build pull requests from forks" setting off.
 
-**Two credentials, in two Doppler configs.** `prd_macos_notarisation` holds the Apple signing secrets.
-Only `release-macos` reads it. `prd_github_release` holds only `GITHUB_TOKEN`. Only `release-publish` and
-`release-promote` read it.
+**One Doppler token.** `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT` reads every prd config, including the Apple
+signing secrets and `GITHUB_TOKEN`. TestFlight, `release-macos`, `release-publish` and `release-promote`
+get it. The guard, both builds and both verify steps do not.
 
 **The signing step runs no code that was built.** A build runs code from every dependency's `build.rs`,
 and any process of the same user can read its parent's starting environment with `ps -E`. So
 `release-macos-build` builds with no token, and `release-macos` signs with the token and runs only
 Apple's tools.
 
-**The signing token is the dangerous one.** It can sign any code as Lightless Labs, and Apple will
-notarize it. If it leaks, you must revoke the certificate. That can also stop copies of `Pessimal.app`
-that people already have from opening.
+**That token can sign any code as Lightless Labs**, and Apple will notarize it. If it leaks, you must
+revoke the certificate. That can also stop copies of `Pessimal.app` that people already have from
+opening.
+
+**TestFlight exposes it too.** The TestFlight step runs a Bazel build while its script holds the token
+in its starting environment, so a `build.rs` in that build could read it with `ps -E`. That step runs on
+every push to `main`.
 
 **The GitHub token can still get code signed.** A fine-grained token acts as the account that made it.
 Today the organisation has one member, and that member is the admin who bypasses the tag ruleset. So
 a leaked release token can push a commit to `main`, which has no ruleset, push a `v*` tag on it, and
 the pipeline signs that code. To close this, make the token from a separate machine account that has
-write access but no admin role, and add a ruleset on `main` that only the owner can bypass. Until then,
-the two Doppler configs keep the signing secrets away from the GitHub token, but not the reverse.
+write access but no admin role, and add a ruleset on `main` that only the owner can bypass.
 
 **tart-ci writes the Doppler token to a file on the host** while a step runs, and deletes it when the
 step ends. If a Buildkite agent crashes during a credentialed step, check the host for leftover
 `tart-ci/*/command.sh` files and `buildkite-tart-ci-*` VMs, and delete them.
 
-**Rotate** the two Doppler tokens and the GitHub token every three months, and at once if one may have
-leaked. Make the new token, put it in Buildkite or Doppler, and only then revoke the old one:
-
-```sh
-doppler configs tokens --project lightless-labs-pessimal --config prd_macos_notarisation
-doppler configs tokens revoke --slug <slug> --project lightless-labs-pessimal --config prd_macos_notarisation
-```
+**Rotate** the Doppler token and the GitHub token every three months, and at once if one may have leaked.
+Put the new value in place before you revoke the old one.
 
 Delete old GitHub tokens at <https://github.com/settings/personal-access-tokens>.
 

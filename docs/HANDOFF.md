@@ -79,22 +79,13 @@
 - **`scripts/asc.py` is a read-only App Store Connect client** for Python 3.9 with no third-party
   packages: ES256 JWTs are signed by shelling out to `openssl`. It replaced sigh's profile fetch and
   worked on first contact where sigh reported only "no matching profile found".
-- **Secrets live in Doppler project `lightless-labs-pessimal`**, on the same service account as
-  Pocket Companion, in three configs. Each is read by one kind of Buildkite step, through the secret
-  that step's tart-ci plugin names in `doppler_token_secret:`:
-  - `prd_ios_deployment`: the TestFlight lanes (plus `GH_TOKEN`), through
-    `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`.
-  - `prd_macos_notarisation`: the Developer ID certificate and the notary key, read by the
-    `release-macos` step through `DOPPLER_PESSIMAL_PRD_MACOS_NOTARISATION`, and by hand by
-    `scripts/release-macos-app.sh`. The TestFlight token cannot read it.
-  - `prd_github_release`: `GITHUB_TOKEN` alone, a fine-grained PAT with Contents write on
-    `Lightless-Labs/pessimal` and `Lightless-Labs/homebrew-tap`, read by `release-publish` and
-    `release-promote` through `DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE`.
-
-  **The last two Buildkite secrets and the `prd_github_release` config were not created by the change
-  that introduced them**, and nothing on the development mini can see whether they exist: it holds no
-  Buildkite token, and its Doppler token is scoped to `home-lab`. Creating them is the owner's, in the
-  runbook's order, after the tag ruleset. The repository had no rulesets on 2026-09-14.
+- **Secrets live in Doppler project `lightless-labs-pessimal`.** Buildkite has one secret for it,
+  `DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT`, and its token reads every prd config (the owner, 2026-09-14;
+  the pipeline comment that called it a `prd_ios_deployment` token was wrong). TestFlight reads
+  `prd_ios_deployment`. `release-macos`, `release-publish` and `release-promote` read
+  `prd_macos_notarisation`: the Developer ID certificate, the notary key and `GITHUB_TOKEN` (a
+  fine-grained PAT with Contents write on `pessimal` and `homebrew-tap`), as Descartes keeps them.
+  `GITHUB_TOKEN` has not been added yet, and nothing has read `prd_macos_notarisation` yet.
 - **The query credential is still the user's**, taken from the settings screen and kept in the
   Keychain — never baked into the bundle. The *usage-reporting* credential is the one exception, and
   a deliberate reversal of the earlier "no app-runtime config" position, decided with the owner on
@@ -457,8 +448,8 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 
 **The first agent release.** Built and never run. The owner's steps, in order, are in
 [`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the tag ruleset first, then the PAT,
-the `prd_github_release` config, the two service tokens, the two Buildkite secrets with access
-policies, then `cog bump --auto`. After it promotes, download `Pessimal-<version>-macos.zip` in a
+`GITHUB_TOKEN` in `prd_macos_notarisation`, a check that the Apple secrets are there, then
+`cog bump --auto`. No new Buildkite secret or Doppler token is needed. After it promotes, download `Pessimal-<version>-macos.zip` in a
 browser on a physical Mac and launch it.
 
 **M8 phase 1 is built.** What remains:

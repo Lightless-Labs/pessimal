@@ -18,7 +18,7 @@ Why it is shaped this way:
 
 * **The credential.** `GITHUB_TOKEN` from the environment, or -- in the Buildkite steps, where the
   tart-ci plugin injects only `DOPPLER_TOKEN` -- read from Doppler (`lightless-labs-pessimal` /
-  `prd_github_release`, which holds nothing else). Both are removed from this process's environment
+  `prd_macos_notarisation`, as Descartes keeps its token beside its notarisation secrets). Both are removed from this process's environment
   before anything else happens, so no child process (release-manifest.sh, release-notes.sh) ever
   inherits either. The token is only ever sent to api.github.com and uploads.github.com; it is never
   forwarded across a redirect, because an asset download answers with a 302 to a signed storage URL
@@ -86,7 +86,7 @@ GITHUB_API = "https://api.github.com"
 GITHUB_HOSTS = ("api.github.com", "uploads.github.com")
 DOPPLER_API = "https://api.doppler.com"
 DOPPLER_PROJECT = "lightless-labs-pessimal"
-DOPPLER_CONFIG = "prd_github_release"
+DOPPLER_CONFIG = "prd_macos_notarisation"
 
 GUEST_IMAGE = "ci-linux-arm64-rust-bazel"
 USER_AGENT = "pessimal-release/1"
@@ -368,7 +368,7 @@ def require_credentials(credentials, action):
     if not credentials[0] and not credentials[1]:
         die("no GITHUB_TOKEN in the environment, and no DOPPLER_TOKEN to read it from Doppler with. "
             "%s writes to GitHub, so it refuses to run without one. In Buildkite the tart-ci plugin's "
-            "`doppler_token_secret: DOPPLER_PESSIMAL_PRD_GITHUB_RELEASE` supplies DOPPLER_TOKEN; by "
+            "`doppler_token_secret: DOPPLER_PESSIMAL_PRD_IOS_DEPLOYMENT` supplies DOPPLER_TOKEN; by "
             "hand, export GITHUB_TOKEN." % action)
 
 
