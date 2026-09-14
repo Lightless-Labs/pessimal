@@ -1,11 +1,11 @@
 # Cutting a release
 
-A release is a `vX.Y.Z` tag on `main`. `cog bump` makes the tag and pushes it. The tag starts a Buildkite
-build that builds, signs, publishes and checks the release. No release has run yet, so the first tag is
-also the first test of this pipeline.
+A release is a `vX.Y.Z` tag on `main`. CI makes the tag when the commits on `main` need a new version. The
+tag starts a Buildkite build that builds, signs, publishes and checks the release. No release has run
+yet, so the first tag is also the first test of this pipeline.
 
 - [One-time setup](#one-time-setup)
-- [Cut a release](#cut-a-release)
+- [How a release is cut](#how-a-release-is-cut)
 - [Watch the build](#watch-the-build)
 - [Check the release](#check-the-release)
 - [Fix a failed release](#fix-a-failed-release)
@@ -54,49 +54,29 @@ doppler secrets --only-names --project lightless-labs-pessimal --config prd_maco
 #         APPLE_NOTARY_KEY_ID  APPLE_NOTARY_ISSUER_ID  APPLE_NOTARY_KEY_P8_BASE64  LL_CLI_RELEASE_GH_TOKEN
 ```
 
-## Cut a release
+## How a release is cut
 
-1. Start from a clean, current `main`:
+Nobody cuts a release by hand. After every CI step passes on `main`, the `release-cut` step runs
+`scripts/release-cut.sh`. It clones `main` and runs `cog bump --auto`:
 
-   ```sh
-   export SSH_AUTH_SOCK=~/.ssh/agent.sock && ssh-add --apple-load-keychain
-   git switch main && git pull --ff-only && git status --short
-   ```
+- If a `feat:` or `fix:` commit (or a breaking change) landed since the last `v*` tag, cog sets the version
+  in `Cargo.toml`, updates `Cargo.lock` and `CHANGELOG.md`, commits `chore(version): vX.Y.Z`, tags it, and
+  pushes `main` and then the tag.
+- Otherwise it does nothing.
 
-2. Make sure the Buildkite build for this commit passed. The tag build does not run fmt, clippy, the
-   OTLP smoke test, the bindings check or the iOS build.
+A push whose subject line contains `[skip release]` does not cut a release. The next push does, with all
+the commits since the last tag.
 
-   ```sh
-   gh api "repos/Lightless-Labs/pessimal/commits/$(git rev-parse HEAD)/status" \
-     --jq '.statuses[] | select(.context == "buildkite/pessimal") | "\(.state) \(.target_url)"'
-   ```
-
-3. See which version `cog` will make:
-
-   ```sh
-   cog bump --dry-run --auto
-   ```
-
-4. Cut it:
-
-   ```sh
-   cog bump --auto
-   ```
-
-`cog bump` sets the version in `Cargo.toml`, updates `Cargo.lock` and `CHANGELOG.md`, commits, tags,
-and pushes `main` and then the tag. If a push fails, push both yourself, `main` first:
-
-```sh
-git push origin main && git push origin vX.Y.Z
-```
+If a cut pushes `main` but fails to push the tag, the next build on `main` finds the untagged version
+commit and pushes its tag.
 
 ## Watch the build
 
-The two pushes start two builds:
+The version commit and the tag start two builds:
 
 | Build | Runs |
 |---|---|
-| `main` | The CI steps, then TestFlight with the new version number. |
+| `main` | The CI steps, then TestFlight with the new version number. `release-cut` finds nothing to release. |
 | `vX.Y.Z` | The eight release steps. |
 
 The cluster runs one macOS VM at a time, and two Linux VMs. The release steps wait for the `main` build's
@@ -136,7 +116,7 @@ already exists.
 
 | Error | Cause | Do |
 |---|---|---|
-| `REFUSED: tag vX.Y.Z says X.Y.Z, but [workspace.package] version …` | `cog bump` did not make the tag | Wipe the tag. Use `cog bump --auto`. |
+| `REFUSED: tag vX.Y.Z says X.Y.Z, but [workspace.package] version …` | The tag was not made by `release-cut` | Delete the tag. `release-cut` makes the right one. |
 | `REFUSED: vX.Y.Z points at …, which is not an ancestor of main` | `main` was not pushed, or the tag is on another branch | `git push origin main`, then Retry. Otherwise wipe the tag. |
 | `REFUSED: a published release already exists for vX.Y.Z` | The release already exists | See above. |
 | `GitHub refused the anonymous GET with HTTP 403` | GitHub rate limit | Retry later. |
@@ -176,19 +156,11 @@ git push origin ":refs/tags/$tag"
 git tag -d "$tag"
 ```
 
-The version commit stays on `main`. Tag again by hand, with a lightweight tag:
+Then push the fix to `main`. When its build passes, `release-cut` cuts the same version again.
+`CHANGELOG.md` gets a second entry for that version.
 
-```sh
-# Nothing in the repo changed: tag the same version commit.
-sha="$(git log -1 --format=%H --grep="^chore(version): $tag\$")"
-git tag "$tag" "$sha" && git push origin "$tag"
-
-# You pushed a fix: wait for its build to pass, then tag main.
-git tag "$tag" HEAD && git push origin "$tag"
-```
-
-Do not run `cog bump` again for the same version. It adds a second version commit and a second
-changelog entry.
+If nothing in the repository had to change, you do not need to wipe anything: Retry the failed step in
+the tag build.
 
 ## Security
 
@@ -210,7 +182,8 @@ opening.
 
 **TestFlight exposes it too.** The TestFlight step runs a Bazel build while its script holds the token
 in its starting environment, so a `build.rs` in that build could read it with `ps -E`. That step runs on
-every push to `main`.
+every push to `main`. See
+[`todos/007-pending-p2-testflight-build-can-read-the-doppler-token.md`](../../todos/007-pending-p2-testflight-build-can-read-the-doppler-token.md).
 
 **Anyone who can push a `v*` tag can get code signed.** There is no tag protection, because GitHub
 rulesets need a paid plan here. Today only the owner can push. The GitHub release token can push too,

@@ -419,6 +419,60 @@ steps:
         "$$shared_dir/.bazel/bin/clients/apple/ios/Pessimal.ipa"
 
   # ---------------------------------------------------------------------------
+  # Cutting agent releases. After every CI step passes on main, release-cut runs
+  # `cog bump --auto` in a fresh clone. If the commits since the last v* tag need
+  # a new version, it pushes a version commit and the tag, and the tag build below
+  # releases. Otherwise it does nothing. Nobody cuts a release by hand.
+  # ---------------------------------------------------------------------------
+  - label: ":scissors: Cut an agent release"
+    key: release-cut
+    if: build.branch == "main" && build.tag == null && build.pull_request.id == null
+    depends_on:
+      - rust-linux
+      - otlp-export-smoke
+      - ios-simulator
+      - macos-bundle
+    concurrency: 1
+    concurrency_group: "pessimal/release-cut"
+    agents:
+      queue: "ci-linux-arm64"
+    plugins:
+      - github.com/Lightless-Labs/tart-ci#v0.2.4:
+          image: "ci-linux-arm64-rust-bazel"
+          os: "linux"
+          always_pull: false
+          headless: true
+          # Reads LL_CLI_RELEASE_GH_TOKEN from prd_macos_notarisation, to push the version commit and tag.
+          doppler_token_secret: DOPPLER_SERVICE_ACCOUNT_TOKEN
+          env:
+            - BUILDKITE_COMMIT
+            - BUILDKITE_MESSAGE
+    command: |
+      set -euo pipefail
+
+      if [[ -z "$${HOME:-}" || "$$HOME" == "/" ]]; then
+        export HOME=/home/admin
+      fi
+
+      subject="$$(printf '%s\n' "$${BUILDKITE_MESSAGE:-}" | head -1)"
+      if [[ "$$subject" == *"[skip release]"* ]]; then
+        echo "subject line asks to skip the release; not cutting one for this push"
+        exit 0
+      fi
+
+      msrv="1.95"
+      have="$$(cargo -V | awk '{print $$2}')"
+      if [[ "$$(printf '%s\n%s\n' "$$msrv" "$$have" | sort -V | head -1)" != "$$msrv" ]]; then
+        if [[ ! -w "$${RUSTUP_HOME:-$$HOME/.rustup}" ]]; then
+          export RUSTUP_HOME="$$HOME/.rustup-ci"
+        fi
+        rustup toolchain install stable --profile minimal
+        rustup default stable
+      fi
+
+      scripts/release-cut.sh
+
+  # ---------------------------------------------------------------------------
   # The agent release. A `vMAJOR.MINOR.PATCH` tag runs these eight steps and
   # nothing else:
   #

@@ -27,10 +27,8 @@ pre_bump_hooks = ["./scripts/set-workspace-version.sh {{version}}"]
 # throwaway remote -- `git cat-file -t v0.1.0` says `commit`, and `git push --follow-tags` moved
 # main and left the tag behind, so no release would ever have started.
 #
-# Both pushes authenticate, so the agent must be loaded before `cog bump` -- after a reboot the
-# socket survives but the agent comes back empty:
-#   export SSH_AUTH_SOCK=~/.ssh/agent.sock && ssh-add --apple-load-keychain
-# docs/runbooks/cutting-a-release.md makes that the first line of the release procedure.
+# CI runs `cog bump --auto` in the release-cut step (scripts/release-cut.sh), which gives both pushes a
+# credential. A version commit with no tag is finished by the next run of that step.
 post_bump_hooks = ["git push origin main", "git push origin v{{version}}"]
 
 [changelog]

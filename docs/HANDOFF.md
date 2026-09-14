@@ -219,6 +219,14 @@ tag-only steps and nothing else: `release-guard` → `release-linux` + (`release
 `release-macos`) → `release-publish` → `release-verify-linux` + `release-verify-macos` →
 `release-promote`.
 
+**CI cuts releases.** After every CI step passes on `main`, `release-cut` (`scripts/release-cut.sh`) clones
+`main` and runs `cog bump --auto`. It pushes a version commit and a `v*` tag only when a `feat:` or `fix:`
+commit landed since the last tag; otherwise it does nothing, and the version commit's own build finds
+nothing to release. It pushes with `LL_CLI_RELEASE_GH_TOKEN`, passed to git through the environment. A
+subject-line `[skip release]` skips the cut. Measured 2026-09-14 against a local bare remote with
+cocogitto 7.0.0: first cut to v0.1.0, no-op on the version commit, a stale build stepping aside, an
+untagged version commit being tagged, a docs-only push doing nothing, and a `fix:` push cutting v0.1.1.
+
 **The macOS build and signing are separate steps, in separate guests.** A review on 2026-09-14 showed
 that `export -n DOPPLER_TOKEN` does not protect the token: a process keeps its starting environment,
 and a `build.rs` running as the same user can read its parent's with `ps -E`. So
@@ -236,7 +244,7 @@ verify steps have downloaded and executed what GitHub serves. The last step rend
 `packaging/homebrew/pessimal-agent.rb.template` into `Lightless-Labs/homebrew-tap`, best effort. If a
 release goes wrong, a human deletes the release and the tag and cuts it again.
 Everything a person does, in order, is in
-[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the secrets to check, `cog bump --auto`,
+[`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): the secrets to check, how CI cuts releases,
 what the two resulting builds look like, how to tell finished from stuck, and how to wipe and re-cut.
 
 It ships four agent tarballs (macOS arm64 and x86_64, Linux arm64 and x86_64 at glibc 2.28),
@@ -446,7 +454,7 @@ arrived from App Store Connect on the *second* upload, after signing and uploadi
 
 **The first agent release.** Built and never run. The owner's steps, in order, are in
 [`runbooks/cutting-a-release.md`](runbooks/cutting-a-release.md): check that `prd_macos_notarisation` holds the
-Apple secrets and inherits `LL_CLI_RELEASE_GH_TOKEN`, then `cog bump --auto`. After it promotes, download `Pessimal-<version>-macos.zip` in a
+Apple secrets and inherits `LL_CLI_RELEASE_GH_TOKEN` (the owner confirmed it on 2026-09-14). CI cuts it. After it promotes, download `Pessimal-<version>-macos.zip` in a
 browser on a physical Mac and launch it.
 
 **M8 phase 1 is built.** What remains:
