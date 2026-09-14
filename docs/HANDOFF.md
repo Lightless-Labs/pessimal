@@ -198,7 +198,7 @@ Two consequences worth knowing:
 
 ## CI and releases: Buildkite only
 
-**GitHub Actions is gone, entirely, as of 2026-09-14.** The owner's ruling was "Not *a single* use of
+**GitHub Actions is gone, entirely, as of 2026-09-14**, and the owner disabled Actions on the repository. The owner's ruling was "Not *a single* use of
 Github Actions. Anywhere." An Actions release workflow had been designed and was dropped, and
 `.github/workflows/ci.yml` was deleted once each check it ran had a home on Buildkite. The project now
 has one automation surface, on hardware it owns, which is also the one that already shipped the iOS
@@ -295,10 +295,8 @@ intermediates and the distribution certificate, runs `scripts/signing-diagnostic
 Bazel (with the SigNoz `--action_env` flags when present), deletes the keychain, and uploads with
 `xcrun altool --upload-app` and an App Store Connect key in `API_PRIVATE_KEYS_DIR`.
 
-**The next push to `main` without `[skip release]` is its first real run.** Measured locally: the
-script passes `shellcheck`; the keychain-list parser works on bash 3.2; the profile Name lookup works;
-`altool` 26.10.1 accepts the flags, reads the key directory, exits 1 on an authentication failure, and
-prints `ERROR:`, which the script also checks for. Not measured: signing and uploading in the guest.
+**It works.** Build #43 (commit `e673c26`, 2026-09-14) signed, built and uploaded with it, and the
+owner confirmed 0.1.0 (43) in TestFlight.
 
 One behaviour is gone: fastlane set the TestFlight "What to Test" text to `Pessimal beta build.`.
 `altool` does not set it. Internal testers do not need it. External TestFlight review does.
@@ -470,8 +468,8 @@ browser on a physical Mac and launch it.
 2. Child spans for `gather`, which needs `pessimal_query_signoz` to hold a sink handle.
 3. **M8 phase 2, the agent.** `[usage_reporting]` in the config, `DO_NOT_TRACK` and `CI` honoured
    (both already implemented in `pessimal_usage::consent`), agent-side span variants, and
-   `Destination::from_build` fed by `option_env!`. Blocked on an agent release path existing, since
-   that is what would inject the credential.
+   `Destination::from_build` fed by `option_env!`. The release path now exists; the credential still has
+   to be added to the release build steps.
 4. Fix `FleetStoreBridge` persisting 3 of its 6 fields. Untouched by M8 — the consent store is
    deliberately separate from it — but still outstanding.
 5. Check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under rules_rust, since no BUILD file here
