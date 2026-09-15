@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-14
+**Updated:** 2026-09-15
 
 ## Current state
 
@@ -235,8 +235,13 @@ setting is off and must stay off: the repository is public, and a stranger's cod
 on the self-hosted cluster that holds signing credentials. `CLAUDE.md` and `AGENTS.md` carry the same
 rule.
 
-**The release is built, and has never run. No `v*` tag has been pushed.** A `vX.Y.Z` tag runs eight
-tag-only steps and nothing else: `release-guard` → `release-linux` + (`release-macos-build` →
+**v0.1.2 is the first published release (2026-09-15, build #60).** Every step passed: both verify
+steps, promote to latest, and a new `Formula/pessimal-agent.rb` in `Lightless-Labs/homebrew-tap`
+whose four hashes match `SHA256SUMS`. v0.1.0 and v0.1.1 are tags with no GitHub release. v0.1.0 failed
+because the guest's rustup could not write `/opt/rustup` (the step now installs its own pinned
+rustup). v0.1.1 failed because Rust 1.98 passes `-Wl,--fix-cortex-a53-843419` for arm64 Linux and zig
+0.15.2 rejects it (cargo-zigbuild is now pinned at 0.23.4, which drops the flag). A `vX.Y.Z` tag runs
+eight tag-only steps and nothing else: `release-guard` → `release-linux` + (`release-macos-build` →
 `release-macos`) → `release-publish` → `release-verify-linux` + `release-verify-macos` →
 `release-promote`.
 
