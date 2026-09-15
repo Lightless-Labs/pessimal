@@ -39,6 +39,10 @@ ZIG_VERSION="0.15.2"
 # The Linux aarch64 wheel for the version above. PyPI file URLs are content-addressed and
 # permanent; the hash is the one PyPI publishes for this file, and was re-computed over a download of
 # this exact URL on 2026-09-13.
+# rustup-init 1.28.2 for aarch64 Linux. The digest is the published rustup-init.sha256, confirmed by hashing
+# the downloaded file on 2026-09-15.
+RUSTUP_INIT_URL="https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unknown-linux-gnu/rustup-init"
+RUSTUP_INIT_SHA256="e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c"
 ZIG_WHEEL_URL="https://files.pythonhosted.org/packages/53/7d/8c277208250ffa72f12a10f52dfc1d45850f08244093065b40c5f4628260/ziglang-0.15.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl"
 ZIG_WHEEL_SHA256="edc0aa60ec964a4cf462d40f68d7de242ddf37fd9a80f2afaee6397059463230"
 CARGO_ZIGBUILD_VERSION="0.22.1"
@@ -139,12 +143,21 @@ if ! cargo_meets_msrv || ! rust_target_installed x86_64-unknown-linux-gnu; then
     say "adding the x86_64-unknown-linux-gnu standard library to the current toolchain"
     rustup target add x86_64-unknown-linux-gnu
   else
-    if [[ ! -w "${RUSTUP_HOME:-$HOME/.rustup}" ]]; then
-      export RUSTUP_HOME="$HOME/.rustup-ci"
-    fi
-    say "installing stable with the x86_64-unknown-linux-gnu target into ${RUSTUP_HOME:-$HOME/.rustup}"
-    rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
-    rustup default stable
+    # The image's rustup cannot write /opt/rustup, and exporting RUSTUP_HOME did not move it (build
+    # #54: "could not create temp file /opt/rustup/tmp/..."). So install a separate rustup under
+    # $HOME, from a pinned and hash-checked rustup-init, and put its bin directory first on PATH.
+    rustup_init="$HOME/rustup-init"
+    curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$rustup_init" "$RUSTUP_INIT_URL" \
+      || die "could not download $RUSTUP_INIT_URL"
+    [[ "$(sha256_of "$rustup_init")" == "$RUSTUP_INIT_SHA256" ]] \
+      || die "rustup-init does not match its pinned sha256 $RUSTUP_INIT_SHA256"
+    chmod +x "$rustup_init"
+    export RUSTUP_HOME="$HOME/.rustup-release" CARGO_HOME="$HOME/.cargo-release"
+    say "installing stable with the x86_64-unknown-linux-gnu target into $RUSTUP_HOME"
+    "$rustup_init" -y --no-modify-path --profile minimal --default-toolchain stable \
+      --target x86_64-unknown-linux-gnu
+    export PATH="$CARGO_HOME/bin:$PATH"
+    hash -r
   fi
 fi
 cargo_meets_msrv || die "cargo is still below MSRV $MSRV after the toolchain step: $(cargo -V)"
