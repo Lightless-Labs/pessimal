@@ -503,7 +503,9 @@ mod tests {
             "18.4",
         );
         let body = pessimal_usage::export_trace_request(&resource, &[trace]).to_string();
-        for leaked in ["signoz.acme.corp", "db-7.internal", "500"] {
+        // "500 from", not "500": the body holds nanosecond timestamps and random ids, which contain
+        // "500" by chance in roughly a third of runs.
+        for leaked in ["signoz.acme.corp", "db-7.internal", "500 from"] {
             assert!(
                 !body.contains(leaked),
                 "{leaked} reached the payload: {body}"
