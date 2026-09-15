@@ -85,6 +85,10 @@ Opt-out traces from the clients and agents to our own SigNoz, so we see our own 
 allowlist enforced by construction; credential baked only into official builds. See
 [the plan](2026-09-11-m8-usage-reporting.md).
 
+### M9 — iCloud settings sync
+The environment, the poll interval and the alert rules sync between the iOS and macOS apps through
+one iCloud key-value entry, merged in Rust. See [the plan](2026-09-14-m9-icloud-settings-sync.md).
+
 ## Out of scope for now
 
 - Push notifications and any server component.

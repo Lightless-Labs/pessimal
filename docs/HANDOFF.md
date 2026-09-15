@@ -130,6 +130,27 @@
   Two follow-ups, both additive: child spans for `gather` (needs a sink handle inside
   `pessimal_query_signoz`), and a span for `probe()` (its session is a throwaway and is given no
   reporter on purpose).
+- **M9 iCloud settings sync — stages 0-4 being built (2026-09-14); stages 5-6 wait for Apple account
+  steps.** The environment, the poll interval and the alert rules sync between the iOS and macOS apps
+  through one iCloud key-value entry, `pessimal.settings`. The merge is pure Rust in
+  `pessimal_client_core::settings_sync`. Plan:
+  [`plans/2026-09-14-m9-icloud-settings-sync.md`](plans/2026-09-14-m9-icloud-settings-sync.md).
+
+  - **Spike (owner step 7):** not run. Record the outcome and the date here.
+  - **kvstore identifier in the iOS App Store profile:** not decoded; owner step 3 has not happened.
+  - **kvstore identifier in the macOS Developer ID profile:** not decoded; owner step 5 has not
+    happened. Both apps are to claim `PKPPLFK854.com.lightless-labs.pessimal.ios`.
+  - **Manual check** ([`runbooks/verifying-settings-sync.md`](runbooks/verifying-settings-sync.md)):
+    not run. It needs stages 5-6.
+
+  With stage 4, `pessimal.environment`, `pessimal.pollIntervalSeconds` and `pessimal.alertRulesJSON`
+  are a projection of `pessimal.sync.replica`, this device's merged copy of the document. The settings
+  screens and sync write them from that projection. `FleetStoreBridge` reads them as before. Without
+  the iCloud entitlement, which no build has yet, the store does not sync and Save works as before,
+  with three differences. On macOS, every launch logs a `com.apple.kvs` fault ("BUG IN CLIENT OF
+  KVS") until stages 5-6 add the entitlement. A first-run Save that fails after the replica took it
+  is applied at the next sync round; a later Save that fails before core accepts its config leaves
+  nothing to sync. The iOS app without the entitlement has not been measured.
 
 ## Verifying the agent locally
 
@@ -471,6 +492,11 @@ browser on a physical Mac and launch it.
 5. Check whether `env!("CARGO_PKG_VERSION")` is `0.0.0` under rules_rust, since no BUILD file here
    passes `version`. It only affects the reported scope version, so it is cosmetic, but it would differ
    between the Cargo and Bazel builds.
+
+**M9 iCloud settings sync.** Stages 0-4 are being built. Next, in order: the owner's portal steps 0-6
+in the [plan](plans/2026-09-14-m9-icloud-settings-sync.md#owner-steps), the gating spike (step 7),
+then stages 5-6 (signing), then the [manual check](runbooks/verifying-settings-sync.md) before the
+first release that ships sync.
 
 Then additional query backends (Honeycomb, ClickStack), or the open items below.
 

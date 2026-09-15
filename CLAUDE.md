@@ -107,3 +107,16 @@ yet — do not add build instructions for them to the docs before they work.
   `docs/plans/2026-09-11-m8-usage-reporting.md` step 4.
 - Regenerating bindings means copying **both** the `.swift` and the `FFI.h` file. Copying only one
   produces link errors that look unrelated.
+- **The iCloud kvstore identifier `PKPPLFK854.com.lightless-labs.pessimal.ios` must never change.**
+  Both apps claim it from M9 stages 5-6. A new identifier is a new, empty store, and every device
+  loses its synced settings. See `docs/plans/2026-09-14-m9-icloud-settings-sync.md`.
+- **A new top-level key or entry key in the settings sync document requires a format bump.** So does
+  removing a known key or making one optional. A new synced setting does not: it is a new register
+  name inside `settings`.
+- Once the iOS app has an entitlements file (M9 stage 5): its `entitlements` select must stay keyed
+  exactly like `provisioning_profile` (`beta_build`, `release_build`, `ci_build`, default). A custom
+  entitlements file replaces the set rules_apple takes from the profile, so every key the app needs
+  must be in the file.
+- Once the Mac app embeds a Developer ID profile (M9 stage 6): regenerate and recommit it whenever the
+  Developer ID Application certificate changes. A profile that does not list the signing certificate
+  stops the app from launching.
