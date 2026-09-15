@@ -94,8 +94,11 @@ if [[ "$head" != "$commit" ]]; then
   exit 0
 fi
 
-export GIT_AUTHOR_NAME="Pessimal release" GIT_AUTHOR_EMAIL="pessimal-release@users.noreply.github.com"
-export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+# In the clone's own config, not environment variables: cog commits through libgit2, which ignores
+# GIT_AUTHOR_NAME and fails with "config value 'user.name' was not found" on a guest with no global
+# git identity.
+git config user.name "Pessimal release"
+git config user.email "pessimal-release@users.noreply.github.com"
 
 # A cut that pushed main but failed to push its tag leaves an untagged version commit at the top of
 # main. Finish that one instead of cutting a new version.
