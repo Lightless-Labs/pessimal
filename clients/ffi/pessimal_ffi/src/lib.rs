@@ -32,6 +32,7 @@
 //! | [`view_records`] | what the screens draw: fleet, host, metric, alert, freshness |
 //! | [`fold_records`] | what one poll produced: result, transitions, advice, failures |
 //! | [`probe_records`] | the "test connection" answer |
+//! | [`settings_sync_records`] | settings sync: the synced values, one sync round, a local Save |
 //! | [`session`] | [`FleetSession`], the one object an app holds, and the only mutable state |
 //!
 //! # Why the crate root re-exports everything
@@ -41,7 +42,7 @@
 //! breaking it: a duplicate name is a bindgen-time failure that surfaces as an unrelated-looking
 //! Swift redeclaration error, a long way from the two files that disagreed.
 //!
-//! Glob-re-exporting all six modules here reproduces that one flat namespace in Rust, where the
+//! Glob-re-exporting all seven modules here reproduces that one flat namespace in Rust, where the
 //! compiler checks it on every build instead of a human checking it with `grep` at generation time:
 //! two modules declaring the same name make `ambiguous_glob_reexports` fire on the `pub use` lines
 //! below. Re-exporting the *same* item through two globs — `view_records` deliberately re-exports
@@ -67,6 +68,7 @@ pub mod convert;
 pub mod fold_records;
 pub mod probe_records;
 pub mod session;
+pub mod settings_sync_records;
 pub mod usage;
 pub mod view_records;
 
@@ -75,4 +77,5 @@ pub use convert::*;
 pub use fold_records::*;
 pub use probe_records::*;
 pub use session::*;
+pub use settings_sync_records::*;
 pub use view_records::*;

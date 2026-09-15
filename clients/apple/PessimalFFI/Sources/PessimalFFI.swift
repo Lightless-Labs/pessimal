@@ -3574,6 +3574,257 @@ public func FfiConverterTypeRestoreReportRecord_lower(_ value: RestoreReportReco
 
 
 /**
+ * The result of a local Save. Mirrors core's `SettingsEdit`.
+ */
+public struct SettingsSyncEditRecord: Equatable, Hashable {
+    /**
+     * The device's new merged copy. Persist it before anything else.
+     */
+    public let replicaDocument: String
+    /**
+     * The values to store and apply. A value can be `None`, for example the poll interval after a
+     * first-run Save that keeps the default.
+     */
+    public let settings: SyncedSettingsRecord
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The device's new merged copy. Persist it before anything else.
+         */replicaDocument: String, 
+        /**
+         * The values to store and apply. A value can be `None`, for example the poll interval after a
+         * first-run Save that keeps the default.
+         */settings: SyncedSettingsRecord) {
+        self.replicaDocument = replicaDocument
+        self.settings = settings
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SettingsSyncEditRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSettingsSyncEditRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SettingsSyncEditRecord {
+        return
+            try SettingsSyncEditRecord(
+                replicaDocument: FfiConverterString.read(from: &buf), 
+                settings: FfiConverterTypeSyncedSettingsRecord.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SettingsSyncEditRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.replicaDocument, into: &buf)
+        FfiConverterTypeSyncedSettingsRecord.write(value.settings, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncEditRecord_lift(_ buf: RustBuffer) throws -> SettingsSyncEditRecord {
+    return try FfiConverterTypeSettingsSyncEditRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncEditRecord_lower(_ value: SettingsSyncEditRecord) -> RustBuffer {
+    return FfiConverterTypeSettingsSyncEditRecord.lower(value)
+}
+
+
+/**
+ * The decisions of one sync round. Mirrors core's `SettingsSyncStep`.
+ */
+public struct SettingsSyncStepRecord: Equatable, Hashable {
+    /**
+     * The device's new merged copy. Persist it before anything else.
+     */
+    public let replicaDocument: String?
+    /**
+     * The text to write to the mailbox, if any.
+     */
+    public let publishDocument: String?
+    /**
+     * The values to store and apply.
+     */
+    public let settings: SyncedSettingsRecord
+    public let status: SettingsSyncStatusRecord
+    /**
+     * Live rules that are not applied, because this build cannot decode or accept them.
+     */
+    public let hiddenRuleCount: UInt32
+    /**
+     * Core's reasons for synced values it refused.
+     */
+    public let rejected: [String]
+    /**
+     * The digest to store once `publish_document` is written.
+     */
+    public let replacedDigest: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The device's new merged copy. Persist it before anything else.
+         */replicaDocument: String?, 
+        /**
+         * The text to write to the mailbox, if any.
+         */publishDocument: String?, 
+        /**
+         * The values to store and apply.
+         */settings: SyncedSettingsRecord, status: SettingsSyncStatusRecord, 
+        /**
+         * Live rules that are not applied, because this build cannot decode or accept them.
+         */hiddenRuleCount: UInt32, 
+        /**
+         * Core's reasons for synced values it refused.
+         */rejected: [String], 
+        /**
+         * The digest to store once `publish_document` is written.
+         */replacedDigest: String?) {
+        self.replicaDocument = replicaDocument
+        self.publishDocument = publishDocument
+        self.settings = settings
+        self.status = status
+        self.hiddenRuleCount = hiddenRuleCount
+        self.rejected = rejected
+        self.replacedDigest = replacedDigest
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SettingsSyncStepRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSettingsSyncStepRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SettingsSyncStepRecord {
+        return
+            try SettingsSyncStepRecord(
+                replicaDocument: FfiConverterOptionString.read(from: &buf), 
+                publishDocument: FfiConverterOptionString.read(from: &buf), 
+                settings: FfiConverterTypeSyncedSettingsRecord.read(from: &buf), 
+                status: FfiConverterTypeSettingsSyncStatusRecord.read(from: &buf), 
+                hiddenRuleCount: FfiConverterUInt32.read(from: &buf), 
+                rejected: FfiConverterSequenceString.read(from: &buf), 
+                replacedDigest: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SettingsSyncStepRecord, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.replicaDocument, into: &buf)
+        FfiConverterOptionString.write(value.publishDocument, into: &buf)
+        FfiConverterTypeSyncedSettingsRecord.write(value.settings, into: &buf)
+        FfiConverterTypeSettingsSyncStatusRecord.write(value.status, into: &buf)
+        FfiConverterUInt32.write(value.hiddenRuleCount, into: &buf)
+        FfiConverterSequenceString.write(value.rejected, into: &buf)
+        FfiConverterOptionString.write(value.replacedDigest, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncStepRecord_lift(_ buf: RustBuffer) throws -> SettingsSyncStepRecord {
+    return try FfiConverterTypeSettingsSyncStepRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncStepRecord_lower(_ value: SettingsSyncStepRecord) -> RustBuffer {
+    return FfiConverterTypeSettingsSyncStepRecord.lower(value)
+}
+
+
+/**
+ * The three synced values as the device stores them. `None` is a value that is not stored.
+ */
+public struct SyncedSettingsRecord: Equatable, Hashable {
+    public let environment: String?
+    public let pollIntervalSeconds: Int64?
+    /**
+     * A JSON array of alert rules, as `FleetConfigRecord::rules_json` carries it.
+     */
+    public let rulesJson: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(environment: String?, pollIntervalSeconds: Int64?, 
+        /**
+         * A JSON array of alert rules, as `FleetConfigRecord::rules_json` carries it.
+         */rulesJson: String?) {
+        self.environment = environment
+        self.pollIntervalSeconds = pollIntervalSeconds
+        self.rulesJson = rulesJson
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SyncedSettingsRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncedSettingsRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncedSettingsRecord {
+        return
+            try SyncedSettingsRecord(
+                environment: FfiConverterOptionString.read(from: &buf), 
+                pollIntervalSeconds: FfiConverterOptionInt64.read(from: &buf), 
+                rulesJson: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SyncedSettingsRecord, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.environment, into: &buf)
+        FfiConverterOptionInt64.write(value.pollIntervalSeconds, into: &buf)
+        FfiConverterOptionString.write(value.rulesJson, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncedSettingsRecord_lift(_ buf: RustBuffer) throws -> SyncedSettingsRecord {
+    return try FfiConverterTypeSyncedSettingsRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncedSettingsRecord_lower(_ value: SyncedSettingsRecord) -> RustBuffer {
+    return FfiConverterTypeSyncedSettingsRecord.lower(value)
+}
+
+
+/**
  * Counters a settings screen can show, plus why reporting is off if it is.
  */
 public struct UsageDiagnosticsRecord: Equatable, Hashable {
@@ -5678,6 +5929,112 @@ public func FfiConverterTypeProbeFailureKind_lower(_ value: ProbeFailureKind) ->
 
 
 /**
+ * What one sync round found. Mirrors core's `SettingsSyncStatus`.
+ */
+
+public enum SettingsSyncStatusRecord: Equatable, Hashable {
+    
+    case upToDate
+    case pausedNewerFormat(format: UInt64
+    )
+    case remoteReplaced
+    case remoteUnreadable
+    case tooLarge(bytes: UInt64
+    )
+    case bootstrapDeferred(message: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SettingsSyncStatusRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSettingsSyncStatusRecord: FfiConverterRustBuffer {
+    typealias SwiftType = SettingsSyncStatusRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SettingsSyncStatusRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .upToDate
+        
+        case 2: return .pausedNewerFormat(format: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 3: return .remoteReplaced
+        
+        case 4: return .remoteUnreadable
+        
+        case 5: return .tooLarge(bytes: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 6: return .bootstrapDeferred(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SettingsSyncStatusRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .upToDate:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .pausedNewerFormat(format):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt64.write(format, into: &buf)
+            
+        
+        case .remoteReplaced:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .remoteUnreadable:
+            writeInt(&buf, Int32(4))
+        
+        
+        case let .tooLarge(bytes):
+            writeInt(&buf, Int32(5))
+            FfiConverterUInt64.write(bytes, into: &buf)
+            
+        
+        case let .bootstrapDeferred(message):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(message, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncStatusRecord_lift(_ buf: RustBuffer) throws -> SettingsSyncStatusRecord {
+    return try FfiConverterTypeSettingsSyncStatusRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSettingsSyncStatusRecord_lower(_ value: SettingsSyncStatusRecord) -> RustBuffer {
+    return FfiConverterTypeSettingsSyncStatusRecord.lower(value)
+}
+
+
+
+/**
  * The single thing the UI colours by.
  *
  * Deliberately *not* `Ord` here and deliberately not given a comparison on the Swift side. In core
@@ -6917,6 +7274,40 @@ public func validateAlertRule(rule: AlertRuleRecord)throws   {try rustCallWithEr
     )
 }
 }
+/**
+ * A local Save: core's `settings_sync::record_edits`. `now_unix_ms` is the current time, in
+ * milliseconds since the Unix epoch.
+ *
+ * # Errors
+ * The [`FfiError`] variant core's refusal maps to, with core's message, when core refuses an
+ * edited value. [`FfiError::Internal`] when no stamp is left.
+ */
+public func settingsSyncRecordEdits(localDocument: String?, applied: SyncedSettingsRecord, base: SyncedSettingsRecord, edited: SyncedSettingsRecord, nowUnixMs: Int64)throws  -> SettingsSyncEditRecord  {
+    return try  FfiConverterTypeSettingsSyncEditRecord_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_pessimal_ffi_fn_func_settings_sync_record_edits(
+        FfiConverterOptionString.lower(localDocument),
+        FfiConverterTypeSyncedSettingsRecord_lower(applied),
+        FfiConverterTypeSyncedSettingsRecord_lower(base),
+        FfiConverterTypeSyncedSettingsRecord_lower(edited),
+        FfiConverterInt64.lower(nowUnixMs),uniffiCallStatus
+    )
+})
+}
+/**
+ * One sync round: core's `settings_sync::step`.
+ */
+public func settingsSyncStep(localDocument: String?, remoteDocument: String?, applied: SyncedSettingsRecord, lastReplacedDigest: String?) -> SettingsSyncStepRecord  {
+    return try!  FfiConverterTypeSettingsSyncStepRecord_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_pessimal_ffi_fn_func_settings_sync_step(
+        FfiConverterOptionString.lower(localDocument),
+        FfiConverterOptionString.lower(remoteDocument),
+        FfiConverterTypeSyncedSettingsRecord_lower(applied),
+        FfiConverterOptionString.lower(lastReplacedDigest),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -6961,6 +7352,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_pessimal_ffi_checksum_func_validate_alert_rule() != 8429) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_pessimal_ffi_checksum_func_settings_sync_record_edits() != 2211) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_pessimal_ffi_checksum_func_settings_sync_step() != 3273) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_pessimal_ffi_checksum_method_fleetsession_export_state() != 53635) {

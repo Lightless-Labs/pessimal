@@ -359,6 +359,16 @@ RustBuffer uniffi_pessimal_ffi_fn_func_tuning_warning_message(RustBuffer warning
 void uniffi_pessimal_ffi_fn_func_validate_alert_rule(RustBuffer rule, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_FN_FUNC_SETTINGS_SYNC_RECORD_EDITS
+#define UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_FN_FUNC_SETTINGS_SYNC_RECORD_EDITS
+RustBuffer uniffi_pessimal_ffi_fn_func_settings_sync_record_edits(RustBuffer local_document, RustBuffer applied, RustBuffer base, RustBuffer edited, int64_t now_unix_ms, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_FN_FUNC_SETTINGS_SYNC_STEP
+#define UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_FN_FUNC_SETTINGS_SYNC_STEP
+RustBuffer uniffi_pessimal_ffi_fn_func_settings_sync_step(RustBuffer local_document, RustBuffer remote_document, RustBuffer applied, RustBuffer last_replaced_digest, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_FFI_PESSIMAL_FFI_RUSTBUFFER_ALLOC
 #define UNIFFI_FFIDEF_FFI_PESSIMAL_FFI_RUSTBUFFER_ALLOC
 RustBuffer ffi_pessimal_ffi_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
@@ -676,6 +686,18 @@ uint16_t uniffi_pessimal_ffi_checksum_func_tuning_warning_message(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_VALIDATE_ALERT_RULE
 #define UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_VALIDATE_ALERT_RULE
 uint16_t uniffi_pessimal_ffi_checksum_func_validate_alert_rule(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_SETTINGS_SYNC_RECORD_EDITS
+#define UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_SETTINGS_SYNC_RECORD_EDITS
+uint16_t uniffi_pessimal_ffi_checksum_func_settings_sync_record_edits(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_SETTINGS_SYNC_STEP
+#define UNIFFI_FFIDEF_UNIFFI_PESSIMAL_FFI_CHECKSUM_FUNC_SETTINGS_SYNC_STEP
+uint16_t uniffi_pessimal_ffi_checksum_func_settings_sync_step(void
     
 );
 #endif
