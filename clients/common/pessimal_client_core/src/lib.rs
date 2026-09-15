@@ -67,6 +67,7 @@ pub mod normalize;
 pub mod observation;
 pub mod plan;
 pub mod rules;
+pub mod settings_sync;
 pub mod view;
 
 #[cfg(any(test, feature = "testing"))]
@@ -90,6 +91,10 @@ pub use crate::observation::{
 pub use crate::plan::{PollPlan, QuerySpec, plan_poll};
 pub use crate::rules::{
     delete_rule, draft_rule, load_rules, parse_rule_id, save_rule, validate_rule,
+};
+pub use crate::settings_sync::{
+    Document, SettingsEdit, SettingsSyncError, SettingsSyncStatus, SettingsSyncStep, Stamp,
+    SyncedSettings, join, project, record_edits, step,
 };
 pub use crate::view::{
     AlertEvidence, AlertPhase, AlertView, CapacityView, CollectionHealth, FleetCounts, FleetView,
