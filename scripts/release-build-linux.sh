@@ -24,8 +24,12 @@
 # Why zig comes from the `ziglang` PyPI wheel, fetched with curl and checked against a pinned SHA-256
 # rather than `pip install`ed: whether this image has pip at all, and whether its system Python refuses
 # installs as externally managed, was never measured. A wheel is a zip, and python3 -- which the floor
-# check needs anyway -- can unpack it with the standard library. The pinned pair is the one that built
-# the measured binaries on the release Mac: zig 0.15.2 with cargo-zigbuild 0.22.1.
+# check needs anyway -- can unpack it with the standard library.
+#
+# cargo-zigbuild must be 0.23.4 or later. Since Rust 1.98, rustc passes -Wl,--fix-cortex-a53-843419
+# when it links aarch64-unknown-linux-gnu, zig 0.15.2 rejects it ("unsupported linker arg"), and
+# 0.23.4 drops it before calling zig (release build #57 failed on 0.22.1). The binary is then linked
+# without that Cortex-A53 erratum workaround, as every Rust release before 1.98 linked it.
 #
 # Nothing here reads a credential, and the build deliberately does not set RUSTFLAGS=-D warnings: a
 # new upstream warning must not block a release that has nothing wrong with it.
@@ -45,7 +49,7 @@ RUSTUP_INIT_URL="https://static.rust-lang.org/rustup/archive/1.28.2/aarch64-unkn
 RUSTUP_INIT_SHA256="e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c"
 ZIG_WHEEL_URL="https://files.pythonhosted.org/packages/53/7d/8c277208250ffa72f12a10f52dfc1d45850f08244093065b40c5f4628260/ziglang-0.15.2-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl"
 ZIG_WHEEL_SHA256="edc0aa60ec964a4cf462d40f68d7de242ddf37fd9a80f2afaee6397059463230"
-CARGO_ZIGBUILD_VERSION="0.22.1"
+CARGO_ZIGBUILD_VERSION="0.23.4"
 LINUX_TRIPLES="aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu"
 
 say() { printf '%s\n' "$*"; }
@@ -207,8 +211,8 @@ with zipfile.ZipFile(wheel) as archive:
 PY
 rm -f "$wheel"
 
-# cargo-zigbuild 0.22.1 looks for `python3 -m ziglang` FIRST and a `zig` binary second (src/zig.rs,
-# find_zig). Both are pointed at the pinned copy -- PYTHONPATH wins over any ziglang the image's own
+# cargo-zigbuild looks for `python3 -m ziglang` FIRST and a `zig` binary second (0.23.4:
+# src/zig/locate.rs, find_zig). Both are pointed at the pinned copy -- PYTHONPATH wins over any ziglang the image's own
 # site-packages might hold, and CARGO_ZIGBUILD_ZIG_PATH covers the fallback -- and both are asserted,
 # so neither discovery route can reach a zig this script did not install.
 export PYTHONPATH="$zig_root${PYTHONPATH:+:$PYTHONPATH}"
