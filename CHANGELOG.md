@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.1.2 - 2026-09-15
+#### Bug Fixes
+- (**release**) pin cargo-zigbuild 0.23.4 for Rust 1.98's aarch64 link flag - (7d59794) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.1.1 - 2026-09-15
 #### Bug Fixes
 - (**release**) install a private rustup when the image's is read-only - (2e2b01a) - El-Fitz, *Claude Opus 5*
