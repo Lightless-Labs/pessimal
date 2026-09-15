@@ -37,12 +37,15 @@ final class PessimalServices {
     /// be read — is not a rule worth having two copies of.
     @ObservationIgnored let stores: FleetStoreBridge
 
+    /// Settings sync with the user's other devices. The settings screen records each Save through it.
+    @ObservationIgnored let settingsSync: SettingsSync
+
     /// - Parameter platform: `.live` in the app; `PlatformStores.inMemory(...)` in a preview, which is
     ///   what keeps a preview from reading — or overwriting — a real API key.
     init(platform: PlatformStores = .live) {
         let bridge = FleetStoreBridge(stores: platform)
         stores = bridge
-        fleet = FleetModel(
+        let fleet = FleetModel(
             settings: bridge,
             stateCache: bridge,
             // Its own store, read afresh at every session rebuild, and deliberately not one of the
@@ -56,6 +59,13 @@ final class PessimalServices {
             // app is the owner.
             observesSystemWake: false
         )
+        self.fleet = fleet
+        settingsSync = SettingsSync(
+            mailbox: platform.settingsMailbox,
+            replica: platform.settingsReplica,
+            settings: platform.settings,
+            onSettingsChanged: { fleet.reloadSettings() }
+        )
     }
 
     /// Starts polling. Called from `App.init()`, not when a view first appears.
@@ -63,7 +73,10 @@ final class PessimalServices {
     /// An app whose fleet is only watched while somebody is looking at it has nothing to say at the
     /// moment they look — and on iOS "looking at it" is the only state there is, so the gap between
     /// launch and first data is the whole of the user's first impression.
+    ///
+    /// Settings sync runs its launch round first, so the fleet starts from the synced settings.
     func start() {
+        settingsSync.start()
         fleet.start()
     }
 
@@ -73,8 +86,9 @@ final class PessimalServices {
     /// app can be in, and the user pulling the list down does not know which one they are in:
     ///
     /// 1. A Keychain that was locked at launch may be open now, so an unresolved key is re-read.
-    /// 2. Settings may have been saved on the screen they just came back from; `reloadSettings()` is a
-    ///    no-op when nothing changed, so this is free when nothing did.
+    /// 2. Settings may have been saved on the screen they just came back from, or on another device. A
+    ///    sync round merges iCloud's copy first; `reloadSettings()` is a no-op when nothing changed, so
+    ///    this is free when nothing did.
     /// 3. `refresh()` polls, or joins the poll already in flight — including from a stopped poller,
     ///    which is exactly how someone who has just fixed an API key finds out.
     ///
@@ -83,6 +97,7 @@ final class PessimalServices {
     /// there is nothing for the user to do about it.
     func refreshNow() async {
         stores.retryUnresolvedCredentials()
+        settingsSync.run(.refresh)
         fleet.reloadSettings()
         await fleet.refresh()
     }
@@ -163,8 +178,12 @@ final class PessimalServices {
     /// outstanding, and `reloadSettings()` is documented as a no-op when neither the connection nor the
     /// configuration has changed. The retry goes first, because the settings reload is what turns a key
     /// that has become readable into a live session.
+    ///
+    /// A sync round runs before the reload, because another device may have changed the settings
+    /// while this app was in the background.
     func enterForeground() {
         stores.retryUnresolvedCredentials()
+        settingsSync.run(.foreground)
         fleet.reloadSettings()
         fleet.resume()
     }

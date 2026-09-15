@@ -66,10 +66,14 @@ struct PessimalRootView: View {
                 .navigationDestination(for: FleetRoute.self) { route in
                     switch route {
                     case .settings:
-                        // Takes its two collaborators by hand rather than through the environment, so
+                        // Takes its collaborators by hand rather than through the environment, so
                         // a screen that cannot be built is a compile error rather than a crash the
                         // first time somebody opens it. Same signature as the macOS app's.
-                        SettingsView(model: services.fleet, connectionStore: services.stores)
+                        SettingsView(
+                            model: services.fleet,
+                            connectionStore: services.stores,
+                            sync: services.settingsSync
+                        )
 
                     case let .host(id):
                         // By id, not by record: see ``FleetRoute/host(id:)``. The model reaches it

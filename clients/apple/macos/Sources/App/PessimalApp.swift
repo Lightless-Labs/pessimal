@@ -45,11 +45,11 @@ struct PessimalApp: App {
 
         // Declared here because `SettingsLink` — the only supported way to open this window from a
         // menu bar app — does nothing at all when no `Settings` scene exists, and does it
-        // silently. `SettingsView` takes its two collaborators by hand rather than through the
+        // silently. `SettingsView` takes its collaborators by hand rather than through the
         // environment, so that a window which cannot be built is a compile error rather than a
         // crash the first time somebody opens it.
         Settings {
-            SettingsView(model: services.fleet, connectionStore: services.stores)
+            SettingsView(model: services.fleet, connectionStore: services.stores, sync: services.settingsSync)
         }
     }
 }

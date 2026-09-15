@@ -16,6 +16,10 @@
 # end-to-end check of §4.11's other load-bearing rule: a backend failure must arrive as *data* on a
 # view that still renders, never as a thrown Swift error.
 #
+# It also runs settings sync for two devices through the real `SettingsSync` coordinator, the
+# in-memory mailbox and replica stores, and the Rust merge. One write is dropped. Both replicas must
+# end with the same bytes as the shared cell, and a further round must publish nothing.
+#
 # macOS only; needs a Swift toolchain. Not run on Linux CI.
 set -euo pipefail
 
@@ -190,13 +194,334 @@ if finished.wait(timeout: .now() + 30) == .timedOut {
     print("TIMED OUT — the async export never completed, which is what an unwired reactor looks like")
     exit(2)
 }
+
+// MARK: - Settings sync
+
+/// Counts how often a coordinator asked the app to reload its settings.
+@MainActor
+final class Counter {
+    var value = 0
+}
+
+/// Runs the main run loop until `condition` holds or two seconds pass.
+///
+/// Mailbox notifications and the delayed initial-sync round reach the coordinator as main-actor
+/// tasks. Those run only while the main thread is free.
+@MainActor
+func spin(until condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(2)
+    while !condition() && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
+    return condition()
+}
+
+/// A config as the settings screen's `makeConfig()` builds it.
+func screenConfig(environment: String, interval: Int64, rules: [AlertRuleRecord]) throws -> FleetConfigRecord {
+    let base = try fleetConfigDefaults(environment: environment)
+    let tuning = try pollTuningValidated(
+        tuning: PollTuningRecord(
+            liveness: base.tuning.liveness,
+            pollIntervalSeconds: interval,
+            metricStepSeconds: base.tuning.metricStepSeconds,
+            chartWindowSeconds: base.tuning.chartWindowSeconds,
+            maxStalenessSeconds: base.tuning.maxStalenessSeconds,
+            backendLagAllowanceSeconds: base.tuning.backendLagAllowanceSeconds,
+            forgetHostAfterSeconds: base.tuning.forgetHostAfterSeconds,
+            maxRetainedHosts: base.tuning.maxRetainedHosts
+        )
+    )
+    return FleetConfigRecord(
+        environment: environment,
+        tuning: tuning,
+        rulesJson: try alertRulesToJson(rules: rules),
+        overviewMetrics: base.overviewMetrics,
+        detailMetrics: base.detailMetrics,
+        focus: base.focus
+    )
+}
+
+/// What `FleetStoreBridge.saveConfig` writes once `FleetModel.applyConfig` accepts a config. A settings
+/// screen then calls `SettingsSync.persist` and runs a `.localSave` round.
+func store(_ config: FleetConfigRecord, in settings: any SettingsStore) {
+    settings.environment = config.environment
+    settings.pollIntervalSeconds = config.tuning.pollIntervalSeconds
+    settings.alertRulesJSON = config.rulesJson
+}
+
+/// The base a settings screen passes to `recordEdits`: the values it was seeded with.
+func screenBase(_ settings: any SettingsStore) -> SyncedSettingsRecord {
+    SyncedSettingsRecord(
+        environment: settings.environment,
+        pollIntervalSeconds: settings.pollIntervalSeconds ?? pollTuningDefaults().pollIntervalSeconds,
+        rulesJson: settings.alertRulesJSON ?? "[]"
+    )
+}
+
+@MainActor
+func syncSmoke() throws {
+    print("settings sync:")
+    let defaultInterval = pollTuningDefaults().pollIntervalSeconds
+    let delay = Duration.milliseconds(250)
+
+    // Device A was set up before sync existed. Device B is a new install. They share one cell.
+    let mailboxA = InMemorySettingsMailbox()
+    let mailboxB = InMemorySettingsMailbox(pairedWith: mailboxA)
+    let replicaA = InMemorySettingsReplicaStore()
+    let replicaB = InMemorySettingsReplicaStore()
+    let settingsA = InMemorySettingsStore(
+        environment: "swift-smoke",
+        pollIntervalSeconds: defaultInterval,
+        alertRulesJSON: "[]"
+    )
+    let settingsB = InMemorySettingsStore()
+    let changesA = Counter()
+    let changesB = Counter()
+    let syncA = SettingsSync(mailbox: mailboxA, replica: replicaA, settings: settingsA, initialSyncDelay: delay) {
+        changesA.value += 1
+    }
+    let syncB = SettingsSync(mailbox: mailboxB, replica: replicaB, settings: settingsB, initialSyncDelay: delay) {
+        changesB.value += 1
+    }
+
+    syncA.start()
+    try check(mailboxA.read() != nil && mailboxA.read() == replicaA.document,
+              "a configured device publishes its settings at launch")
+    try check(syncA.status == .upToDate && syncA.isMailboxAvailable == true, "and reports that sync is on")
+    try check(changesA.value == 0, "launch changes nothing on the device that already had the settings")
+
+    syncB.start()
+    try check(settingsB.environment == "swift-smoke" && settingsB.pollIntervalSeconds == defaultInterval,
+              "a new device takes the environment and interval from the cell")
+    try check(changesB.value == 1, "and asks the app to reload once")
+    try check(mailboxB.writeCount == 0, "and publishes nothing, because it holds nothing new")
+
+    // A adds a rule and changes the interval. The cell drops that write.
+    let rule = try draftAlertRule(
+        environment: "swift-smoke",
+        name: "CPU high",
+        metric: .cpuUtilization,
+        comparator: .greaterThan,
+        threshold: 0.9,
+        forDurationSeconds: 60,
+        selector: .all
+    )
+    let editedA = try screenConfig(environment: "swift-smoke", interval: 45, rules: [rule])
+    let savedA = try syncA.recordEdits(base: screenBase(settingsA), edited: editedA)
+    try check(savedA.config == editedA, "a Save with no remote change in between returns what the user typed")
+    store(savedA.config, in: settingsA)
+    syncA.persist(savedA)
+    mailboxA.writesToDrop = 1
+    syncA.run(.localSave)
+    try check(mailboxA.droppedWriteCount == 1 && mailboxA.read() != replicaA.document,
+              "the cell dropped A's write")
+
+    // B changes the environment meanwhile, and its write lands.
+    let editedB = try screenConfig(environment: "swift-smoke-b", interval: defaultInterval, rules: [])
+    let savedB = try syncB.recordEdits(base: screenBase(settingsB), edited: editedB)
+    store(savedB.config, in: settingsB)
+    syncB.persist(savedB)
+    syncB.run(.localSave)
+    try check(mailboxB.read() == replicaB.document, "B's Save reached the cell")
+
+    // A hears about it through the mailbox notification.
+    mailboxA.deliver(.serverChange)
+    try check(spin { settingsA.environment == "swift-smoke-b" }, "A applies B's environment")
+    try check(settingsA.pollIntervalSeconds == 45 && settingsA.alertRulesJSON == savedA.config.rulesJson,
+              "and keeps its own interval and rule, although their write was dropped")
+    try check(mailboxA.read() == replicaA.document, "A writes the merged copy back")
+
+    mailboxB.deliver(.serverChange)
+    try check(spin { settingsB.pollIntervalSeconds == 45 }, "B applies A's interval")
+    try check(settingsB.alertRulesJSON == savedA.config.rulesJson, "and A's rule")
+    try check(replicaA.document == replicaB.document && replicaA.document == mailboxA.read(),
+              "both replicas and the cell hold the same bytes")
+
+    var writes = (mailboxA.writeCount, mailboxB.writeCount)
+    syncA.run(.refresh)
+    syncB.run(.refresh)
+    try check(mailboxA.writeCount == writes.0 && mailboxB.writeCount == writes.1,
+              "a further round on each device publishes nothing")
+
+    // A Save that fails after `recordEdits` never reaches `persist`. It leaves nothing to sync.
+    let replicaBeforeFailedSave = replicaA.document
+    let settingsBeforeFailedSave = (settingsA.environment, settingsA.pollIntervalSeconds, settingsA.alertRulesJSON)
+    let changesBeforeFailedSave = changesA.value
+    _ = try syncA.recordEdits(
+        base: screenBase(settingsA),
+        edited: try screenConfig(environment: "swift-smoke-failed", interval: 40, rules: [])
+    )
+    try check(replicaA.document == replicaBeforeFailedSave, "recording a Save does not persist it")
+    syncA.run(.refresh)
+    try check(mailboxA.writeCount == writes.0 && changesA.value == changesBeforeFailedSave
+              && (settingsA.environment, settingsA.pollIntervalSeconds, settingsA.alertRulesJSON) == settingsBeforeFailedSave,
+              "the next round after a failed Save writes nothing")
+
+    // A round that runs between `recordEdits` and `persist`, while core judges the config, merges
+    // another device's change. `persist` keeps that change in the replica.
+    let mailboxC = InMemorySettingsMailbox()
+    let mailboxD = InMemorySettingsMailbox(pairedWith: mailboxC)
+    let replicaC = InMemorySettingsReplicaStore()
+    let replicaD = InMemorySettingsReplicaStore()
+    let settingsC = InMemorySettingsStore(
+        environment: "swift-smoke",
+        pollIntervalSeconds: defaultInterval,
+        alertRulesJSON: "[]"
+    )
+    let settingsD = InMemorySettingsStore()
+    let syncC = SettingsSync(mailbox: mailboxC, replica: replicaC, settings: settingsC) {}
+    let syncD = SettingsSync(mailbox: mailboxD, replica: replicaD, settings: settingsD) {}
+    syncC.start()
+    syncD.start()
+    let savedC = try syncC.recordEdits(
+        base: screenBase(settingsC),
+        edited: try screenConfig(environment: "swift-smoke", interval: 40, rules: [])
+    )
+    let savedD = try syncD.recordEdits(
+        base: screenBase(settingsD),
+        edited: try screenConfig(environment: "swift-smoke-d", interval: defaultInterval, rules: [])
+    )
+    store(savedD.config, in: settingsD)
+    syncD.persist(savedD)
+    syncD.run(.localSave)
+    syncC.run(.serverChange)
+    try check(settingsC.environment == "swift-smoke-d", "a round during C's Save applies D's environment")
+    store(savedC.config, in: settingsC)
+    syncC.persist(savedC)
+    // Project C's replica alone, with no mailbox, to see what `persist` left in it.
+    let projectedC = InMemorySettingsStore(
+        environment: settingsC.environment,
+        pollIntervalSeconds: settingsC.pollIntervalSeconds,
+        alertRulesJSON: settingsC.alertRulesJSON
+    )
+    SettingsSync(mailbox: nil, replica: replicaC, settings: projectedC) {}.run(.refresh)
+    try check(projectedC.environment == "swift-smoke-d" && projectedC.pollIntervalSeconds == 40,
+              "persist joins the Save with the replica: D's environment and C's interval")
+    syncC.run(.localSave)
+    syncD.run(.refresh)
+    try check(settingsC.environment == "swift-smoke-d" && settingsD.pollIntervalSeconds == 40
+              && replicaC.document == replicaD.document && replicaC.document == mailboxC.read(),
+              "C and D converge")
+
+    // A deletes the rule and that write is dropped too. B changes the interval. An initial-sync
+    // change then merges on A without publishing, and A publishes after the delay.
+    let editedA2 = try screenConfig(environment: "swift-smoke-b", interval: 45, rules: [])
+    let savedA2 = try syncA.recordEdits(base: screenBase(settingsA), edited: editedA2)
+    store(savedA2.config, in: settingsA)
+    syncA.persist(savedA2)
+    mailboxA.writesToDrop = 1
+    syncA.run(.localSave)
+    let editedB2 = try screenConfig(environment: "swift-smoke-b", interval: 50, rules: [rule])
+    let savedB2 = try syncB.recordEdits(base: screenBase(settingsB), edited: editedB2)
+    store(savedB2.config, in: settingsB)
+    syncB.persist(savedB2)
+    syncB.run(.localSave)
+
+    writes.0 = mailboxA.writeCount
+    mailboxA.deliver(.initialSync)
+    try check(spin { settingsA.pollIntervalSeconds == 50 }, "an initial-sync change merges B's interval on A")
+    try check(mailboxA.writeCount == writes.0, "and A does not publish yet")
+    try check(spin { mailboxA.read() == replicaA.document }, "A publishes its merged copy after the delay")
+
+    mailboxB.deliver(.serverChange)
+    try check(spin { settingsB.alertRulesJSON == "[]" }, "B removes the rule A deleted")
+    try check(replicaA.document == replicaB.document && replicaB.document == mailboxB.read(),
+              "both replicas and the cell hold the same bytes again")
+    writes = (mailboxA.writeCount, mailboxB.writeCount)
+    syncA.run(.refresh)
+    syncB.run(.refresh)
+    try check(mailboxA.writeCount == writes.0 && mailboxB.writeCount == writes.1,
+              "and a further round publishes nothing")
+
+    // An account change drops A's replica. An edit A never published loses to the cell.
+    let editedA3 = try screenConfig(environment: "swift-smoke-a", interval: 50, rules: [])
+    let savedA3 = try syncA.recordEdits(base: screenBase(settingsA), edited: editedA3)
+    store(savedA3.config, in: settingsA)
+    syncA.persist(savedA3)
+    mailboxA.writesToDrop = 1
+    syncA.run(.localSave)
+    mailboxA.deliver(.accountChanged)
+    try check(spin { settingsA.environment == "swift-smoke-b" }, "after an account change the cell's environment wins")
+    try check(replicaA.document == mailboxA.read(), "and A's rebuilt replica equals the cell")
+
+    // A synced interval core refuses is not applied, and the screen is told why.
+    mailboxB.write(#"{"format":1,"settings":{"poll_interval_seconds":{"at":[253402300799999,0],"value":"0"}},"rules":{}}"#)
+    syncA.run(.refresh)
+    try check(settingsA.pollIntervalSeconds == 50 && !syncA.rejected.isEmpty,
+              "a refused synced interval is kept out of the settings and listed as rejected")
+    try check(syncA.footnote?.contains(syncA.rejected[0]) == true, "the footnote carries core's reason")
+
+    // A newer format pauses sync and is never written over.
+    let newer = #"{"format":2,"surprise":true}"#
+    mailboxB.write(newer)
+    writes.0 = mailboxA.writeCount
+    syncA.run(.refresh)
+    try check(syncA.status == .pausedNewerFormat(format: 2) && mailboxA.writeCount == writes.0,
+              "a newer format pauses sync and publishes nothing")
+    try check(mailboxA.read() == newer, "the newer document is left as it was")
+
+    mailboxA.deliver(.quotaViolation)
+    try check(spin { syncA.quotaExceeded }, "a quota violation is shown")
+
+    // Without iCloud the round still keeps the replica and the settings screen still saves.
+    let offlineSettings = InMemorySettingsStore(environment: "swift-smoke", pollIntervalSeconds: defaultInterval, alertRulesJSON: "[]")
+    let offline = SettingsSync(
+        mailbox: InMemorySettingsMailbox(isAvailable: false),
+        replica: InMemorySettingsReplicaStore(),
+        settings: offlineSettings
+    ) {}
+    offline.start()
+    try check(offline.isMailboxAvailable == false && offline.footnote != nil, "an unavailable mailbox is reported")
+    let noMailbox = SettingsSync(mailbox: nil, replica: InMemorySettingsReplicaStore(), settings: offlineSettings) {}
+    noMailbox.start()
+    let offlineEdit = try screenConfig(environment: "swift-smoke", interval: 40, rules: [])
+    try check(try noMailbox.recordEdits(base: screenBase(offlineSettings), edited: offlineEdit).config == offlineEdit,
+              "with no mailbox a Save still returns what the user typed")
+    do {
+        _ = try noMailbox.recordEdits(
+            base: screenBase(offlineSettings),
+            edited: try screenConfig(environment: "swift-smoke", interval: 40, rules: []).withEnvironment("a::b")
+        )
+        throw SmokeFailure(description: "recordEdits must refuse an environment core refuses")
+    } catch let error as FfiError {
+        guard case .InvalidConfig = error else { throw SmokeFailure(description: "expected InvalidConfig, got \(error)") }
+        try check(true, "recordEdits throws core's refusal for an environment with '::'")
+    }
+}
+
+extension FleetConfigRecord {
+    func withEnvironment(_ environment: String) -> FleetConfigRecord {
+        FleetConfigRecord(
+            environment: environment,
+            tuning: tuning,
+            rulesJson: rulesJson,
+            overviewMetrics: overviewMetrics,
+            detailMetrics: detailMetrics,
+            focus: focus
+        )
+    }
+}
+
+do {
+    try MainActor.assumeIsolated { try syncSmoke() }
+} catch {
+    print("FAILED: \(error)")
+    exit(1)
+}
 exit(0)
 SWIFT
+
+# The shared PessimalKit sources compile into the same module as the bindings, as in
+# scripts/build-macos-app.sh, so the settings sync case drives the real coordinator.
+shared_sources=()
+while IFS= read -r source; do
+    shared_sources+=("$source")
+done < <(find clients/apple/PessimalKit/Sources -type f -name '*.swift' | LC_ALL=C sort)
 
 swiftc -O \
     -Xcc -fmodule-map-file="$BINDINGS/PessimalFFIFFI.modulemap" -I "$BINDINGS" \
     -L target/debug -lpessimal_ffi \
     -framework SystemConfiguration -framework CoreFoundation -framework Security \
-    "$BINDINGS/PessimalFFI.swift" "$WORK/main.swift" -o "$WORK/smoke"
+    "$BINDINGS/PessimalFFI.swift" "${shared_sources[@]}" "$WORK/main.swift" -o "$WORK/smoke"
 
 "$WORK/smoke"

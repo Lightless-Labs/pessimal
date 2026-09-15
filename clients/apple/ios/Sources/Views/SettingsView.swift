@@ -19,6 +19,7 @@
 //    once nothing is unsaved.
 //  - `draftAlertRule` and `validateAlertRule` decide whether a rule may exist.
 //  - `probe` decides what "the connection works" means — see ``SettingsProbeReportView``.
+//  - `settingsSyncRecordEdits` records a Save for the user's other devices — see `SettingsSync`.
 //
 //  This screen's own contribution is trimming whitespace, turning text fields into numbers, and
 //  laying the result out.
@@ -42,6 +43,9 @@ struct SettingsView: View {
 
     private let model: FleetModel
     private let connectionStore: any SettingsConnectionStore
+
+    /// Records each Save for the user's other devices. `nil` saves without syncing.
+    private let sync: SettingsSync?
 
     /// Everything the user is editing. Compared against ``committed`` to know whether anything is
     /// unsaved, so it holds only values the user can change.
@@ -86,9 +90,10 @@ struct SettingsView: View {
     @State private var isSaving = false
 
     @MainActor
-    init(model: FleetModel, connectionStore: any SettingsConnectionStore) {
+    init(model: FleetModel, connectionStore: any SettingsConnectionStore, sync: SettingsSync?) {
         self.model = model
         self.connectionStore = connectionStore
+        self.sync = sync
         let seed = Self.seed(model: model, connectionStore: connectionStore)
         _draft = State(initialValue: seed.draft)
         _committed = State(initialValue: seed.draft)
@@ -403,12 +408,17 @@ struct SettingsView: View {
             }
             .disabled(!hasUnsavedChanges || isSaving)
         } footer: {
-            Text(
-                """
-                A configuration is judged as a whole — the interval, the liveness policy and the rule \
-                set interlock — so nothing here takes effect until it is saved.
-                """
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    """
+                    A configuration is judged as a whole — the interval, the liveness policy and the \
+                    rule set interlock — so nothing here takes effect until it is saved.
+                    """
+                )
+                if let syncNote = sync?.footnote {
+                    Text(syncNote)
+                }
+            }
         }
     }
 
@@ -502,16 +512,24 @@ struct SettingsView: View {
     /// config, and `applyConfig` — the path that goes through `setConfig` and returns the warnings this
     /// screen renders — refuses to run without a session. So a first run bootstraps through the store,
     /// and every save after that goes through core.
+    ///
+    /// Settings sync records the Save first. What it returns is the config to save: the draft, except
+    /// where another device changed a value this Save did not. The replica takes the Save only once it
+    /// goes ahead: before the config reaches the store on a first run, and after core accepts the config
+    /// otherwise. A Save that fails before that point leaves nothing to sync.
     private func save() async {
         saveError = nil
 
-        let config: FleetConfigRecord
+        let typed: FleetConfigRecord
+        let edit: SettingsSync.Edit?
         do {
-            config = try makeConfig()
+            typed = try makeConfig()
+            edit = try sync?.recordEdits(base: Self.syncBase(committed), edited: typed)
         } catch {
             saveError = FleetModel.message(for: error)
             return
         }
+        let config = edit?.config ?? typed
 
         isSaving = true
         defer { isSaving = false }
@@ -538,6 +556,8 @@ struct SettingsView: View {
 
         if needsSession {
             do {
+                // The replica takes the Save before the store does.
+                if let edit { sync?.persist(edit) }
                 try connectionStore.saveConfig(config)
                 storedConfig = config
             } catch {
@@ -559,12 +579,30 @@ struct SettingsView: View {
             // The deciding pass: `setConfig` judges the whole config and hands back the warnings.
             // Nothing here decides the config is acceptable — this call is the deciding.
             committedWarnings = try await model.applyConfig(config)
+            // Core accepted the config. On a first run the replica already took the Save above.
+            if !needsSession, let edit { sync?.persist(edit) }
             committed = draft
             // A saved connection invalidates whatever the last test said about the old one.
             if connectionIsNew { probeState = .idle }
+            sync?.run(.localSave)
+            // The saved config took a value from another device, so the fields show what was saved.
+            if config != typed { reseed() }
         } catch {
             saveError = FleetModel.message(for: error)
         }
+    }
+
+    /// The values the screen started from, as the base of a synced Save.
+    ///
+    /// Always the committed draft, which is refreshed on every reseed and every successful Save. Never
+    /// `storedConfig`. Rules that could not be read give a `nil` base, which deletes no rule.
+    private static func syncBase(_ committed: Draft) -> SyncedSettingsRecord {
+        let environment = committed.environment.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SyncedSettingsRecord(
+            environment: environment.isEmpty ? nil : environment,
+            pollIntervalSeconds: SettingsNumber.int64(from: committed.pollIntervalSeconds),
+            rulesJson: committed.rulesUnreadable == nil ? (try? alertRulesToJson(rules: committed.rules)) : nil
+        )
     }
 
     private func notReadyMessage() -> String {

@@ -9,6 +9,12 @@ import Foundation
 /// Swift model of a rule would be a second definition of a rule, and the two would disagree the
 /// first time either side changed.
 ///
+/// Settings sync: `environment`, `pollIntervalSeconds` and `alertRulesJSON` are written from the
+/// projection of this device's settings document, `pessimal.sync.replica` (see
+/// ``SettingsReplicaStore`` and `SettingsSync`). Write them through a settings Save, which records
+/// the edit in that document first. A value written here directly is not an edit, and the next sync
+/// round can replace it. `backendBaseURL` is not synced: this store is its only source.
+///
 /// Every property is optional, and `nil` means *not configured*, not *empty*. The distinction
 /// matters because the core supplies the defaults: `fleetConfigDefaults(environment:)` and
 /// `pollTuningDefaults()` are what an unset value falls back to, and only the Model layer knows to
@@ -144,7 +150,9 @@ public final class UserDefaultsSettingsStore: SettingsStore, @unchecked Sendable
     /// Writes a value, or removes the key when there is no value.
     ///
     /// Removing rather than storing a null keeps one representation of "unset", so a value written
-    /// and then cleared is indistinguishable from one never written.
+    /// and then cleared is indistinguishable from one never written. That holds for these four keys
+    /// only. Inside `pessimal.sync.replica` a cleared value is a stamped `null`, which is not the same
+    /// as a value never set.
     private func write(_ value: Any?, forKey key: String) {
         if let value {
             defaults.set(value, forKey: key)

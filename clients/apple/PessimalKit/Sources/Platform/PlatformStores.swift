@@ -1,10 +1,10 @@
 import Foundation
 
-/// The four places this app keeps things, handed to the Model layer as one value.
+/// The places this app keeps things, handed to the Model layer as one value.
 ///
 /// Exists so a view model takes a single parameter with a single test substitute rather than three
 /// of each, and so there is one obvious place to see that the secret goes somewhere different from
-/// everything else. It holds four references and adds no behaviour: any logic that appears here —
+/// everything else. It holds references and adds no behaviour: any logic that appears here —
 /// deciding what to do when the environment changes, choosing defaults for unset settings — belongs
 /// in the Model layer, which is the layer that can ask the core.
 public struct PlatformStores: Sendable {
@@ -20,31 +20,41 @@ public struct PlatformStores: Sendable {
     /// is what "reset connection" calls and an opt-out must not be collateral damage of clearing a
     /// mistyped URL. See ``UsageConsentStore``.
     public let usageConsent: any UsageConsentStore
+    /// Where the settings document is shared with the user's other devices. `nil` shares nothing.
+    public let settingsMailbox: (any SettingsMailbox)?
+    /// This device's merged copy of the settings document. See ``SettingsReplicaStore``.
+    public let settingsReplica: any SettingsReplicaStore
 
     public init(
         apiKey: any APIKeyStore,
         settings: any SettingsStore,
         fleetState: any FleetStateStore,
-        usageConsent: any UsageConsentStore
+        usageConsent: any UsageConsentStore,
+        settingsMailbox: (any SettingsMailbox)?,
+        settingsReplica: any SettingsReplicaStore
     ) {
         self.apiKey = apiKey
         self.settings = settings
         self.fleetState = fleetState
         self.usageConsent = usageConsent
+        self.settingsMailbox = settingsMailbox
+        self.settingsReplica = settingsReplica
     }
 
-    /// What the app runs on: the login keychain, `UserDefaults.standard`, and a file under
-    /// Application Support.
+    /// What the app runs on: the login keychain, `UserDefaults.standard`, a file under
+    /// Application Support, and the iCloud key-value store.
     ///
     /// One shared value rather than a computed property that builds a new set on every access. The
-    /// three stores are stateless proxies onto shared system state, so duplicates would behave
+    /// stores are proxies onto shared system state, so duplicates would behave
     /// identically today — but "the app has one of these" is the property worth being able to rely
     /// on the day one of them grows a cache or a debounce.
     public static let live = PlatformStores(
         apiKey: KeychainAPIKeyStore(),
         settings: UserDefaultsSettingsStore(),
         fleetState: FileFleetStateStore(),
-        usageConsent: UserDefaultsUsageConsentStore()
+        usageConsent: UserDefaultsUsageConsentStore(),
+        settingsMailbox: UbiquitousSettingsMailbox(),
+        settingsReplica: UserDefaultsSettingsReplicaStore()
     )
 
     /// What tests and previews run on: nothing outside the process.
@@ -58,13 +68,18 @@ public struct PlatformStores: Sendable {
         // Opted out by default in tests and previews, which is the opposite of the app's default and
         // deliberately so: a preview must never be able to report, and a test asserting the opt-out
         // path should not need a line of setup to get there.
-        usageConsent: InMemoryUsageConsentStore = InMemoryUsageConsentStore(optedOut: true)
+        usageConsent: InMemoryUsageConsentStore = InMemoryUsageConsentStore(optedOut: true),
+        // No mailbox by default, so a preview never shares settings.
+        settingsMailbox: InMemorySettingsMailbox? = nil,
+        settingsReplica: InMemorySettingsReplicaStore = InMemorySettingsReplicaStore()
     ) -> PlatformStores {
         PlatformStores(
             apiKey: apiKey,
             settings: settings,
             fleetState: fleetState,
-            usageConsent: usageConsent
+            usageConsent: usageConsent,
+            settingsMailbox: settingsMailbox,
+            settingsReplica: settingsReplica
         )
     }
 }
