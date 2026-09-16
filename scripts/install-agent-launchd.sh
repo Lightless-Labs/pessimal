@@ -31,8 +31,8 @@
 # A --tarball or --binary carrying com.apple.quarantine is refused. macOS sets that attribute on a
 # file that arrived through a browser (or Mail, or AirDrop) and keeps it through Finder's expansion
 # and through `cp`, `install` and `ditto`. A quarantined agent under launchd has no window in which
-# Gatekeeper could ask about it, so it fails to start and says nothing (packaging/macos/GATEKEEPER.md
-# has the whole story). Stripping the attribute silently would make a Gatekeeper decision the user
+# Gatekeeper could ask about it, so it would fail to start and say nothing -- unmeasured, and not
+# measurable on a SIP-disabled guest (packaging/macos/GATEKEEPER.md has the whole story). Stripping the attribute silently would make a Gatekeeper decision the user
 # never saw, so the refusal names the file and prints the command that removes it; --clear-quarantine
 # is for a user who has decided, and clears the attribute on the installed copy only. The archive is
 # checked, not just the binary inside it: `tar` does not carry the attribute onto what it unpacks

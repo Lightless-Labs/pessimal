@@ -3,8 +3,16 @@
 The macOS `pessimal-agent` binary is signed and notarized, but it has no stapled ticket. A plain binary
 cannot hold one. So the first time macOS checks a downloaded copy, it asks Apple over the network.
 
-On a host that cannot reach Apple, that first start can fail. Under launchd there is no message: the
-agent does not start, and its metrics do not arrive.
+On a host that cannot reach Apple, that first start can fail. Under launchd there would be no message:
+the agent would not start, and its metrics would not arrive. **Nobody has measured this.** An attempt on
+the development VM on 2026-09-15 proved nothing, because that guest has SIP disabled and developer mode
+enabled: an ad-hoc signed binary with the same quarantine attribute, which Gatekeeper must reject, ran
+as well. A real measurement needs a Mac with SIP on, a browser download, and no route to Apple.
+
+This applies to one install path: a browser download. Homebrew, mise and `curl` + `tar xzf` never mark
+a file as quarantined, so Gatekeeper never looks at the binary. Checked with `brew install
+lightless-labs/tap/pessimal-agent` against v0.1.2 on 2026-09-16: the installed binary has no extended
+attributes at all.
 
 `Pessimal.app` is different. It is stapled, so it opens without network access.
 
@@ -63,10 +71,20 @@ Or run the installer with `--clear-quarantine`.
 
 ## What would fix it
 
-A signed, notarized and stapled `.pkg` or `.dmg` can start without network access. A `.pkg` needs a
-Developer ID Installer certificate. The release uses a Developer ID Application certificate. It is not
-known if the `.p12` in `lightless-labs-pessimal/prd_macos_notarisation` also has an Installer
-certificate.
+An installer package. Apple's Developer Technical Support states that "stapling only works for bundled
+code (typically apps), installer packages, and disk images", and advises packaging a command-line tool
+in a container that supports stapling ([thread 736973](https://developer.apple.com/forums/thread/736973)).
+For a tool the package is the best of the three: "When the user goes to install the package, Gatekeeper
+checks it. Assuming that check passes, Gatekeeper does no further checks on the content it installed"
+([thread 706379](https://developer.apple.com/forums/thread/706379)). The same page records a Gatekeeper
+bug that blocks any tool double-clicked in Finder, and names a package as the way around it.
+
+A `.pkg` needs a Developer ID Installer certificate. The release uses a Developer ID Application
+certificate. It is not known if the `.p12` in `lightless-labs-pessimal/prd_macos_notarisation` also has
+an Installer certificate, and only the Account Holder can create one.
+
+The plan, the alternatives (the agent inside `Pessimal.app`, a stapled `.dmg`) and the commands are in
+[`todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md`](../../todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md).
 
 ## The app
 

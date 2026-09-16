@@ -1,8 +1,8 @@
 # Distribution: where a release goes and how someone installs it
 
-**Status:** phase 1 built, not yet run.
-**Phase 1 built:** 2026-09-13, on Buildkite. No `v*` tag has been pushed, so no release exists and the
-release has never run end to end.
+**Status:** phase 1 done.
+**Phase 1 built:** 2026-09-13, on Buildkite. **First published release: v0.1.2, 2026-09-15** (build #60),
+cut automatically by CI. v0.1.0 and v0.1.1 are tags whose builds failed; see `docs/HANDOFF.md`.
 **Revised:** 2026-09-14: what phase 1 was built as, and corrections to decisions 3, 5 and 6, each marked
 where it stands.
 **Context:** the agent had no release artefacts at all, and the macOS app had no home.
@@ -35,12 +35,14 @@ where it stands.
 | Thing | Built by | Published to |
 |---|---|---|
 | iOS app | Buildkite, every green push to `main` | TestFlight. Works. |
-| macOS menu bar app | Buildkite `release-macos`, on a `vX.Y.Z` tag → `Pessimal-<version>-macos.zip`, signed, notarized, stapled | GitHub Releases, once a tag is pushed. None has been. |
-| Host agent | Buildkite `release-linux` and `release-macos`, on the same tag → four tarballs | GitHub Releases and `lightless-labs/tap/pessimal-agent`, once a tag is pushed. None has been. |
+| macOS menu bar app | Buildkite `release-macos`, on a `vX.Y.Z` tag → `Pessimal-<version>-macos.zip`, signed, notarized, stapled | GitHub Releases. Works, from v0.1.2. |
+| Host agent | Buildkite `release-linux` and `release-macos`, on the same tag → four tarballs | GitHub Releases and `lightless-labs/tap/pessimal-agent`. Works, from v0.1.2. |
 
-So the honest answer to "where do I get it" is still, today: you build it. The release that changes
-that is built and has never run. `scripts/install-agent-launchd.sh` installs from `target/release`,
-builds on the spot, or (with `--tarball`) takes a downloaded release archive.
+`brew install lightless-labs/tap/pessimal-agent` was run against the v0.1.2 formula on 2026-09-16: it
+installs the notarized binary with no quarantine attribute, writes `etc/pessimal/pessimal.toml`, and
+`--check` accepts that config. Nothing else has been installed from a release yet.
+`scripts/install-agent-launchd.sh` installs from `target/release`, builds on the spot, or (with
+`--tarball`) takes a downloaded release archive.
 
 ## Decisions
 
@@ -154,7 +156,7 @@ target.
 
 ## Phases
 
-1. **The release.** *Built 2026-09-13 on Buildkite; not yet run.* Tag `vX.Y.Z` → build the Linux and
+1. **The release.** *Built 2026-09-13 on Buildkite; first ran for real on 2026-09-15, v0.1.2.* Tag `vX.Y.Z` → build the Linux and
    macOS agents and the app → sign and notarize the macOS artefacts → publish a prerelease with
    `SHA256SUMS` computed from the bytes GitHub serves → verify by anonymous download and execution →
    promote to latest → render the Homebrew formula into the tap. `cog bump` now moves the workspace
@@ -174,5 +176,7 @@ target.
   its own check that the formula installs is still open: nothing today installs the rendered formula
   before it is committed.
 - Sign the Linux artefacts too (minisign or cosign), or let `SHA256SUMS` on a tagged release stand?
+- A stapled `.pkg` for the macOS agent, which needs a Developer ID Installer certificate. See
+  [`todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md`](../../todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md).
 - The macOS app has no update mechanism at all once installed. A cask updates on `brew upgrade`; a
   hand-downloaded zip never does. Sparkle or accept it?
