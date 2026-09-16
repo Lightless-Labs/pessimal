@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.5.0 - 2026-09-16
+#### Features
+- (**apps**) show only the fleet tallies that are not zero - (98ad3dc) - El-Fitz, *Claude Opus 5*
+#### Bug Fixes
+- (**apps**) keep the iOS Liveness row one line tall - (70ef6ef) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.4.0 - 2026-09-16
 #### Features
 - (**agent**) set the agent up with `pessimal-agent init` - (8824488) - El-Fitz, *Claude Opus 5*
