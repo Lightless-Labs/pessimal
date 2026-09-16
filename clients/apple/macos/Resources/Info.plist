@@ -10,6 +10,11 @@
 	<string>com.lightless-labs.pessimal.macos</string>
 	<key>CFBundleExecutable</key>
 	<string>Pessimal</string>
+	<!-- AppIcon.icns, beside this file, rendered by scripts/render-macos-app-icon.sh. Named without
+	     its extension, which is what CFBundleIconFile takes. A menu bar app has no Dock icon, but
+	     Finder, Spotlight, System Settings and Gatekeeper's open dialog all show this one. -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
