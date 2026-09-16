@@ -135,6 +135,13 @@ struct FleetListView: View {
                 }
             } header: {
                 Text(FleetFormat.count(fleet.counts.hosts, singular: "host", plural: "hosts"))
+            } footer: {
+                // The bottom of the screen, under everything: which build this is. A footer rather
+                // than a row, so it cannot be mistaken for something about the fleet.
+                Text(AppVersion.fromBundle().labelled)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
             }
         } else {
             // `adopt` sets `fleet` and `sessionState` together, so this is the width of one reload

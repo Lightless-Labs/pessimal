@@ -19,8 +19,8 @@ use chrono::Duration;
 use pessimal_agent_core::config::AgentConfig;
 use pessimal_agent_core::error::{AgentError, Result};
 use pessimal_agent_core::onboarding::{
-    Answers, ConfigLocation, KeyPlacement, LAUNCH_AGENT_LABEL, ServicePlan, SystemFacts, answer,
-    merge_environment_file, render_toml,
+    self, Answers, ConfigLocation, KeyPlacement, LAUNCH_AGENT_LABEL, ServicePlan, SystemFacts,
+    answer, merge_environment_file, render_toml,
 };
 use pessimal_agent_core::preset::{BackendPreset, ExportProtocol};
 use pessimal_agent_core::resource::AgentIdentity;
@@ -273,6 +273,15 @@ pub fn run(config_flag: Option<PathBuf>, args: &InitArgs) -> Result<()> {
     Ok(())
 }
 
+/// The config file to read when nobody named one: the first of the places `init` can write that
+/// actually exists.
+///
+/// # Errors
+/// Returns [`AgentError::Config`] naming every path tried when none of them holds a config.
+pub fn find_config() -> Result<PathBuf> {
+    onboarding::find_config(&gather_facts(None), std::path::Path::exists)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Facts
 
@@ -384,7 +393,7 @@ fn from_arguments(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Ans
             AgentError::Config("--preset is required with --non-interactive".to_owned())
         })?;
     let endpoint = match args.endpoint.as_deref() {
-        Some(value) => answer::endpoint(value)?,
+        Some(value) => answer::endpoint_for(value, preset)?,
         None => existing
             .map(|config| config.export.endpoint.clone())
             .ok_or_else(|| {
@@ -455,11 +464,11 @@ fn ask(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Answers> {
     };
 
     let endpoint = match args.endpoint.as_deref() {
-        Some(value) => answer::endpoint(value)?,
+        Some(value) => answer::endpoint_for(value, preset)?,
         None => ask_until(
             "Endpoint URL",
             &existing.map_or_else(String::new, |config| config.export.endpoint.clone()),
-            answer::endpoint,
+            |raw| answer::endpoint_for(raw, preset),
         )?,
     };
 

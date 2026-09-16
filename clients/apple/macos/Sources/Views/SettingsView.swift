@@ -116,6 +116,7 @@ public struct SettingsView: View {
             SettingsStartupSection(controller: loginItem)
             SettingsUsageReportingSection(model: model)
             statusSection
+            aboutSection
             footer(candidate)
         }
         .formStyle(.grouped)
@@ -206,11 +207,19 @@ public struct SettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            HStack {
-                TextField("Poll interval", text: $draft.pollIntervalSeconds)
-                    .frame(maxWidth: 90)
-                Text("seconds")
-                    .foregroundStyle(.secondary)
+            // LabeledContent, not an HStack holding a labelled TextField: a Form aligns a row's
+            // label against every other row's, and a TextField whose own label is inside an HStack
+            // opts out of that — the label, the field and "seconds" then bunch up on the leading
+            // edge while every neighbouring row stays aligned.
+            LabeledContent("Poll interval") {
+                HStack(spacing: 6) {
+                    TextField("", text: $draft.pollIntervalSeconds)
+                        .labelsHidden()
+                        .frame(maxWidth: 90)
+                        .multilineTextAlignment(.trailing)
+                    Text("seconds")
+                        .foregroundStyle(.secondary)
+                }
             }
             Text("How often the backend is asked. When the next poll actually happens is still core's call — after a failure it backs off on its own.")
                 .font(.callout)
@@ -260,6 +269,17 @@ public struct SettingsView: View {
     /// `lastPersistenceError` matters more than it looks: `FleetModel.applyConfig` swallows a failed
     /// write into that property rather than throwing, so a config that reached core but never
     /// reached the disk would look like a clean save and quietly revert on the next launch.
+    /// Which build this is.
+    ///
+    /// Here as well as in the menu's footer because a person reporting something is as likely to
+    /// have Settings open as the menu, and "which version?" is the first question either way.
+    @ViewBuilder
+    private var aboutSection: some View {
+        Section("About") {
+            LabeledContent("Version", value: AppVersion.fromBundle().display)
+        }
+    }
+
     @ViewBuilder
     private var statusSection: some View {
         let sessionProblem: String? = {

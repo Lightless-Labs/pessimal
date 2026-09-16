@@ -21,7 +21,16 @@ struct MenuFooterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            status
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                status
+                Spacer(minLength: 8)
+                // Which build this is, where it is out of the way of everything that changes.
+                Text(AppVersion.fromBundle().display)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                    .accessibilityLabel("Pessimal version \(AppVersion.fromBundle().display)")
+            }
 
             HStack(spacing: 8) {
                 Button {

@@ -59,9 +59,6 @@ enum Command {
     Init(init::InitArgs),
 }
 
-/// Where the config is read from when no `--config` and no `PESSIMAL_CONFIG` were given.
-const DEFAULT_CONFIG_FILE: &str = "pessimal.toml";
-
 fn main() -> ExitCode {
     // A daemon logs to stderr, and only colours it when something is there to read it.
     //
@@ -98,11 +95,15 @@ fn run(cli: &Cli) -> Result<()> {
         return init::run(cli.config.clone(), args);
     }
 
-    let config_path = cli
-        .config
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE));
+    // Where `init` writes, not just the working directory: a config written to Homebrew's prefix
+    // must be the one `pessimal-agent --check` reads, or the agent reports that its own config does
+    // not exist. The error names every place it looked.
+    let config_path = match cli.config.clone() {
+        Some(path) => path,
+        None => init::find_config()?,
+    };
     let mut config = AgentConfig::from_file(&config_path)?;
+    tracing::debug!(path = %config_path.display(), "read configuration");
     config.apply_env(&environment())?;
 
     if cli.sample {

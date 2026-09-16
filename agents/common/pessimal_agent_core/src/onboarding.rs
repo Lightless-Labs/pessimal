@@ -103,6 +103,47 @@ impl Answers {
 pub mod answer {
     use super::{AgentError, BackendPreset, Result};
 
+    /// Trims, requires an absolute http(s) URL, and refuses a SigNoz Cloud *console* address.
+    ///
+    /// The console address is the one in the browser, and it is the obvious thing to paste. It is
+    /// also a single-page app that answers 200 to any path, so an OTLP exporter posting to it is
+    /// told everything is fine, for ever, while nothing is ingested — measured on a user's Mac,
+    /// 2026-09-16, where a test export "succeeded" against
+    /// `https://infinite-chimp.us2.signoz.cloud/` and no host ever appeared.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Config`] with a sentence naming what is wrong, and for the console
+    /// address the ingest address to use instead.
+    pub fn endpoint_for(raw: &str, preset: BackendPreset) -> Result<String> {
+        let value = endpoint(raw)?;
+        if preset != BackendPreset::Signoz {
+            return Ok(value);
+        }
+        let host = value
+            .split("://")
+            .nth(1)
+            .unwrap_or_default()
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        // Only SigNoz Cloud, whose addresses are all `<workspace>.<region>.signoz.cloud`. A
+        // self-hosted instance has whatever hostname its owner gave it and is left alone.
+        if !host.ends_with(".signoz.cloud") || host.starts_with("ingest.") {
+            return Ok(value);
+        }
+        let region = host
+            .strip_suffix(".signoz.cloud")
+            .and_then(|rest| rest.rsplit('.').next())
+            .filter(|region| !region.is_empty())
+            .unwrap_or("<region>");
+        Err(AgentError::Config(format!(
+            "{host} is the SigNoz console, not its ingest endpoint. The console answers every \
+             request, so metrics sent there are accepted and dropped. Use \
+             https://ingest.{region}.signoz.cloud:443"
+        )))
+    }
+
     /// Trims, and requires an absolute http(s) URL.
     ///
     /// # Errors
@@ -125,7 +166,9 @@ pub mod answer {
                 "{value:?} has no host after the scheme"
             )));
         }
-        Ok(value.to_owned())
+        // A trailing slash is harmless for gRPC and wrong for HTTP, where the SDK appends
+        // `/v1/metrics` to it and produces a double slash.
+        Ok(value.trim_end_matches('/').to_owned())
     }
 
     /// Trims, and refuses the URN separator and whitespace inside the name.
@@ -284,6 +327,54 @@ impl ConfigLocation {
                 .to_owned(),
         ))
     }
+}
+
+/// Every place a config could be, in the order the agent should look when nobody named one.
+///
+/// Reading is not writing. `init` picks *one* place to write; a later `pessimal-agent --check` has
+/// to find whatever is already there, wherever `init` put it — and after `init` wrote to Homebrew's
+/// prefix, a bare `pessimal-agent` that only looked at `./pessimal.toml` said "No such file or
+/// directory" while a perfectly good config sat where the service reads it. Measured on a user's
+/// Mac, 2026-09-16.
+///
+/// The working directory comes first so a developer's local `pessimal.toml` still wins.
+#[must_use]
+pub fn config_candidates(facts: &SystemFacts) -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from(CONFIG_FILE_NAME)];
+    if let Some(prefix) = &facts.homebrew_prefix {
+        candidates.push(prefix.join("etc/pessimal").join(CONFIG_FILE_NAME));
+    }
+    if let Some(xdg) = &facts.xdg_config_home {
+        candidates.push(xdg.join("pessimal").join(CONFIG_FILE_NAME));
+    }
+    if let Some(home) = &facts.home {
+        candidates.push(home.join(".config/pessimal").join(CONFIG_FILE_NAME));
+    }
+    candidates.push(Path::new("/etc/pessimal").join(CONFIG_FILE_NAME));
+    candidates.dedup();
+    candidates
+}
+
+/// The first candidate that exists, or every place that was looked at.
+///
+/// `exists` is injected so the order can be tested without a filesystem.
+///
+/// # Errors
+/// Returns [`AgentError::Config`] naming every path tried, and `pessimal-agent init`, when none of
+/// them is there.
+pub fn find_config(facts: &SystemFacts, exists: impl Fn(&Path) -> bool) -> Result<PathBuf> {
+    let candidates = config_candidates(facts);
+    if let Some(found) = candidates.iter().find(|path| exists(path)) {
+        return Ok(found.clone());
+    }
+    let tried = candidates
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AgentError::Config(format!(
+        "no configuration file found. Looked in: {tried}. Run `pessimal-agent init` to write one,          or pass --config PATH."
+    )))
 }
 
 /// Where the API key is written, which decides the config file's mode.
@@ -775,6 +866,47 @@ mod tests {
     }
 
     #[test]
+    fn the_signoz_console_address_is_refused_with_the_ingest_one() {
+        let error = answer::endpoint_for(
+            "https://infinite-chimp.us2.signoz.cloud/",
+            BackendPreset::Signoz,
+        )
+        .expect_err("the console is not an ingest endpoint");
+        let message = format!("{error}");
+        assert!(
+            message.contains("https://ingest.us2.signoz.cloud:443"),
+            "{message}"
+        );
+
+        // The ingest address itself, and self-hosted instances, pass.
+        assert_eq!(
+            answer::endpoint_for("https://ingest.us2.signoz.cloud:443", BackendPreset::Signoz)
+                .expect("valid"),
+            "https://ingest.us2.signoz.cloud:443"
+        );
+        assert_eq!(
+            answer::endpoint_for("http://signoz.internal:4317", BackendPreset::Signoz)
+                .expect("valid"),
+            "http://signoz.internal:4317"
+        );
+        // Another backend's host is none of this check's business.
+        assert_eq!(
+            answer::endpoint_for("https://anything.signoz.cloud", BackendPreset::Otlp)
+                .expect("valid"),
+            "https://anything.signoz.cloud"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_is_trimmed() {
+        // The HTTP exporter appends `/v1/metrics`, so a trailing slash makes a double slash.
+        assert_eq!(
+            answer::endpoint("https://ingest.eu.signoz.cloud:443/").expect("valid"),
+            "https://ingest.eu.signoz.cloud:443"
+        );
+    }
+
+    #[test]
     fn an_environment_is_one_word_without_the_urn_separator() {
         assert_eq!(
             answer::environment(" production ").expect("valid"),
@@ -889,6 +1021,53 @@ mod tests {
     fn with_nowhere_to_write_the_error_says_what_to_pass() {
         let error = ConfigLocation::resolve(&SystemFacts::default()).expect_err("nowhere");
         assert!(format!("{error}").contains("--config"), "{error}");
+    }
+
+    #[test]
+    fn a_config_is_looked_for_where_init_would_have_put_it() {
+        // The bug this exists to stop: `init` writes to Homebrew's prefix, then a bare
+        // `pessimal-agent --check` reads `./pessimal.toml`, finds nothing, and says the config does
+        // not exist while it sits where the service reads it.
+        let facts = SystemFacts {
+            homebrew_prefix: Some(PathBuf::from("/opt/homebrew")),
+            homebrew_config_dir_exists: true,
+            ..macos_facts()
+        };
+        let brew = PathBuf::from("/opt/homebrew/etc/pessimal/pessimal.toml");
+        let found = find_config(&facts, |path| path == brew).expect("found");
+        assert_eq!(found, brew);
+    }
+
+    #[test]
+    fn a_config_in_the_working_directory_still_wins() {
+        let facts = SystemFacts {
+            homebrew_prefix: Some(PathBuf::from("/opt/homebrew")),
+            homebrew_config_dir_exists: true,
+            ..macos_facts()
+        };
+        assert_eq!(
+            find_config(&facts, |_| true).expect("found"),
+            PathBuf::from("pessimal.toml")
+        );
+    }
+
+    #[test]
+    fn with_no_config_anywhere_the_error_lists_where_it_looked() {
+        let facts = SystemFacts {
+            homebrew_prefix: Some(PathBuf::from("/opt/homebrew")),
+            ..macos_facts()
+        };
+        let error = find_config(&facts, |_| false).expect_err("nothing exists");
+        let message = format!("{error}");
+        assert!(
+            message.contains("/opt/homebrew/etc/pessimal/pessimal.toml"),
+            "{message}"
+        );
+        assert!(
+            message.contains("/Users/someone/.config/pessimal/pessimal.toml"),
+            "{message}"
+        );
+        assert!(message.contains("pessimal-agent init"), "{message}");
     }
 
     #[test]

@@ -576,10 +576,25 @@ func fleetTallySmoke() throws {
               "what is not shown is still spoken")
 }
 
+// What the apps print as their version, from the two bundle strings.
+func appVersionSmoke() throws {
+    try check(AppVersion(marketing: "0.5.0", build: "0.5.0").display == "0.5.0",
+              "a build that repeats the release shows the release alone, as the Mac app's does")
+    try check(AppVersion(marketing: "0.5.0", build: "0.5.0.74").display == "0.5.0 (74)",
+              "a release plus a counter shows the counter, as TestFlight builds do")
+    try check(AppVersion(marketing: "0.5.0", build: "dirty").display == "0.5.0 (dirty)",
+              "a build string that does not follow the release is shown whole")
+    try check(AppVersion(marketing: "", build: "").display.isEmpty,
+              "a bundle with neither says nothing rather than 'unknown'")
+    try check(AppVersion(marketing: "0.5.0", build: "0.5.0").labelled == "Pessimal 0.5.0",
+              "the labelled form names the app")
+}
+
 do {
     try MainActor.assumeIsolated { try syncSmoke() }
     try loginItemSmoke()
     try fleetTallySmoke()
+    try appVersionSmoke()
 } catch {
     print("FAILED: \(error)")
     exit(1)
