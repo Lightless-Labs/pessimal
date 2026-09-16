@@ -12,6 +12,14 @@
 
 import SwiftUI
 
+/// The height the host rows need, reported up from the rows themselves.
+private struct HostListHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// The content of the menu bar window.
 struct FleetMenuView: View {
     @Environment(FleetModel.self) private var model
@@ -26,6 +34,20 @@ struct FleetMenuView: View {
 
     /// The tallest the host list is allowed to get before it scrolls.
     private static let listMaxHeight: CGFloat = 420
+
+    /// What the list is given before it has been measured: about one row, so the first frame is
+    /// plausible rather than a sliver that jumps.
+    private static let listInitialHeight: CGFloat = 96
+
+    /// The height the rows actually need, measured.
+    ///
+    /// Load-bearing, not a refinement. The list was the only vertically flexible view in the
+    /// dropdown's stack, and a `maxHeight` alone does not stop a parent shrinking it: when the
+    /// window offers less height than the content wants, SwiftUI takes it all out of the flexible
+    /// child. Measured 2026-09-16 — at a 160pt window a list wanting 282pt was given 42, and with
+    /// less still it reaches zero, which is a dropdown showing counts and no hosts however many
+    /// hosts are reporting. A resolved height cannot be squeezed.
+    @State private var hostListHeight: CGFloat = 0
 
     var body: some View {
         // One clock for the whole window. `freshness` is a function of `now` and has to be
@@ -134,7 +156,10 @@ struct FleetMenuView: View {
 
     private func hostList(fleet: FleetViewRecord, now: Date) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // A plain stack, not `LazyVStack`: the height below is measured from this content, and a
+            // lazy stack only builds what it already believes is visible — which is nothing, until
+            // it has a height. A fleet is tens of rows, not thousands.
+            VStack(alignment: .leading, spacing: 0) {
                 // Core's order: degraded hosts first. Not re-sorted, not filtered, not grouped —
                 // a second sort here would be a second place that order is decided, and the two
                 // would disagree the first time either changed.
@@ -149,9 +174,23 @@ struct FleetMenuView: View {
                     )
                 }
             }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: HostListHeightKey.self, value: proxy.size.height)
+                }
+            )
         }
-        .frame(maxHeight: Self.listMaxHeight)
+        .frame(height: resolvedListHeight)
+        .onPreferenceChange(HostListHeightKey.self) { measured in
+            hostListHeight = measured
+        }
         .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// The list's height: what the rows need, until they need more than the dropdown can give.
+    private var resolvedListHeight: CGFloat {
+        guard hostListHeight > 0 else { return Self.listInitialHeight }
+        return min(hostListHeight, Self.listMaxHeight)
     }
 
     private var emptyFleet: some View {
