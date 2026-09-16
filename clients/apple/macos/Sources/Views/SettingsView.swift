@@ -29,6 +29,10 @@ public struct SettingsView: View {
     /// Records each Save for the user's other devices. `nil` saves without syncing.
     private let sync: SettingsSync?
 
+    /// The login item, from the composition root. Its own switch reads and writes the system; this
+    /// view only hands it to the section that shows it.
+    private let loginItem: any LoginItemController
+
     /// Everything the user is editing. Compared against ``committed`` to know whether anything is
     /// unsaved, so it holds only values the user can change.
     private struct Draft: Equatable {
@@ -72,10 +76,16 @@ public struct SettingsView: View {
     @State private var isSaving = false
 
     @MainActor
-    public init(model: FleetModel, connectionStore: any SettingsConnectionStore, sync: SettingsSync?) {
+    public init(
+        model: FleetModel,
+        connectionStore: any SettingsConnectionStore,
+        sync: SettingsSync?,
+        loginItem: any LoginItemController = SMAppServiceLoginItem()
+    ) {
         self.model = model
         self.connectionStore = connectionStore
         self.sync = sync
+        self.loginItem = loginItem
         let seed = Self.seed(model: model, connectionStore: connectionStore)
         _draft = State(initialValue: seed.draft)
         _committed = State(initialValue: seed.draft)
@@ -103,6 +113,7 @@ public struct SettingsView: View {
                 }
             )
             warningsSection(candidate)
+            SettingsStartupSection(controller: loginItem)
             SettingsUsageReportingSection(model: model)
             statusSection
             footer(candidate)

@@ -502,8 +502,39 @@ extension FleetConfigRecord {
     }
 }
 
+// The login item, the one piece of logic in the macOS "open at login" switch: what the settings
+// window shows for each state macOS can report. Registering anything with the real launchd from a
+// test would be a change to the machine running it, so only the mapping and the fake are driven.
+func loginItemSmoke() throws {
+    try check(SMAppServiceLoginItem.state(from: .enabled) == .enabled, "an enabled login item reads as enabled")
+    try check(SMAppServiceLoginItem.state(from: .notRegistered) == .disabled, "an unregistered one reads as disabled")
+    try check(SMAppServiceLoginItem.state(from: .requiresApproval) == .requiresApproval,
+              "one waiting for the user reads as requiresApproval")
+    if case .unavailable = SMAppServiceLoginItem.state(from: .notFound) {
+        try check(true, "a login item macOS cannot find reads as unavailable, with a reason")
+    } else {
+        throw SmokeFailure(description: ".notFound must map to .unavailable")
+    }
+
+    let item = InMemoryLoginItemController(state: .disabled)
+    try item.setEnabled(true)
+    try check(item.state == .enabled, "turning the switch on enables the item")
+    try item.setEnabled(false)
+    try check(item.state == .disabled, "turning it off disables it")
+
+    struct Refused: Error, LocalizedError { var errorDescription: String? { "refused" } }
+    let failing = InMemoryLoginItemController(state: .disabled, failure: Refused())
+    do {
+        try failing.setEnabled(true)
+        throw SmokeFailure(description: "a refused registration must throw")
+    } catch is Refused {
+        try check(failing.state == .disabled, "a refused registration leaves the item off")
+    }
+}
+
 do {
     try MainActor.assumeIsolated { try syncSmoke() }
+    try loginItemSmoke()
 } catch {
     print("FAILED: \(error)")
     exit(1)
