@@ -10,6 +10,12 @@
 #if canImport(PessimalFFI)
     import PessimalFFI
 #endif
+#if canImport(PessimalKit)
+    // `FleetTally`, which both apps share. Under Bazel PessimalKit is a real separate module; the
+    // macOS script compiles everything into one, which is why this guard is here and not an
+    // unconditional import.
+    import PessimalKit
+#endif
 import SwiftUI
 
 /// Presentation for the core's verdicts, in one place so that two screens cannot draw `Warning` two
@@ -20,6 +26,24 @@ import SwiftUI
 /// Mac must not have to learn something else on the phone. Both types are platform-neutral and ought
 /// to be one shared type; see this file's entry in the handoff notes.
 enum FleetStyle {
+
+    // MARK: - Fleet tallies
+
+    /// The tint for one of the fleet summary's numbers.
+    ///
+    /// The words and which tallies are shown live in `FleetTally`, shared by both apps; only the
+    /// colour is this app's, because `Color` is SwiftUI's and the shared module holds no views.
+    static func tint(for tally: FleetTally) -> Color {
+        switch tally {
+        case .hosts: return .primary
+        case .alive: return .green
+        case .stale: return .orange
+        case .down: return .red
+        case .unknown: return .secondary
+        case .firingAlerts: return .red
+        case .pendingAlerts: return .orange
+        }
+    }
 
     // MARK: - Severity
 

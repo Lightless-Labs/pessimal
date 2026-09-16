@@ -12,6 +12,24 @@ import SwiftUI
 /// Presentation for the core's verdicts, in one place so that two screens cannot draw `Warning`
 /// two different ways.
 enum MenuBarStyle {
+    // MARK: - Fleet tallies
+
+    /// The tint for one of the fleet summary's numbers.
+    ///
+    /// The words and which tallies are shown live in `FleetTally`, shared by both apps; only the
+    /// colour is this app's, because `Color` is SwiftUI's and the shared module holds no views.
+    static func tint(for tally: FleetTally) -> Color {
+        switch tally {
+        case .hosts: return .primary
+        case .alive: return .green
+        case .stale: return .orange
+        case .down: return .red
+        case .unknown: return .secondary
+        case .firingAlerts: return .red
+        case .pendingAlerts: return .orange
+        }
+    }
+
     // MARK: - Severity
 
     /// The SF Symbol for a severity.

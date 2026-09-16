@@ -294,8 +294,8 @@
         "bzlTransitiveDigest": "yTCRXL/UI7c34LtN9B4jisSgk44mjOpEpml+Xm24w0w=",
         "usagesDigest": "wp2FWQHdlQVkd0tlGDDP5rM7E3TxfXHf/pMU4LaswGo=",
         "recordedFileInputs": {
-          "@@//Cargo.lock": "e591e4dd9b6ebf5f524c3d8e354f0b97905dcdfdbeb8dad55e6cb49732185761",
-          "@@//Cargo.toml": "dd35d325eeb86e5d28a1df0f5c4fce4e8256500d5ba49cf81316ac29d83a09d3",
+          "@@//Cargo.lock": "52301f683a5fbf8cbaaad76f71980be60a3dd152517836ee6b2f6734728685c0",
+          "@@//Cargo.toml": "5dcd21fbbf5cd624764dba752d2aed8b933c23ff0445b970bf43115003ec29ab",
           "@@//agents/common/pessimal_agent_core/Cargo.toml": "affcce62eb82cf035d16e80824004e0d410bc1674a7dcc3c9eaff03bdfd16800",
           "@@//agents/host/pessimal_agent_host/Cargo.toml": "8bbab1af94fcf845559fe9bd6dae17a1b4afb6fec595f18fb2958a0979be8911",
           "@@//clients/common/pessimal_client_core/Cargo.toml": "55c03571b6e066ad13ec8b3eab09740743934d0607b46992fc67c1ded49d4413",

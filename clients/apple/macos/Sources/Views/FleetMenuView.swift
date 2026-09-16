@@ -222,31 +222,38 @@ struct FleetCountsView: View {
     let counts: FleetCountsRecord
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                tally(counts.hosts, label: "hosts", tint: .primary)
-                separator
-                tally(counts.alive, label: "alive", tint: .green)
-                separator
-                tally(counts.stale, label: "stale", tint: .orange)
-                separator
-                tally(counts.down, label: "down", tint: .red)
-                separator
-                tally(counts.unknown, label: "unknown", tint: .secondary)
-                Spacer(minLength: 0)
-            }
+        // Only what is worth reading: the total and the alive count always, anything else when it is
+        // not zero (`FleetTally`). A healthy fleet says "12 hosts · 12 alive" rather than spending
+        // two lines on three zeroes.
+        let visible = FleetTally.visible(in: counts)
+        let liveness = visible.filter { !$0.tally.isAlertTally }
+        let alerts = visible.filter { $0.tally.isAlertTally }
 
-            HStack(spacing: 6) {
-                tally(counts.firingAlerts, label: "firing", tint: .red)
-                separator
-                tally(counts.pendingAlerts, label: "pending", tint: .orange)
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 4) {
+            row(liveness)
+            if !alerts.isEmpty {
+                row(alerts)
             }
         }
         .font(.caption)
-        // Every tally is shown even at zero. A row whose entries appear and disappear is a row
-        // whose positions have to be re-read every time; a steady one can be glanced at.
         .monospacedDigit()
+        // Every count is spoken, including the ones the eye is spared: a gap is not something a
+        // screen reader can notice.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(FleetTally.spokenSummary(of: counts))
+    }
+
+    /// One line of tallies, with a separator between neighbours and none at either end.
+    private func row(_ entries: [(tally: FleetTally, value: UInt32)]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(Array(entries.enumerated()), id: \.element.tally) { index, entry in
+                if index > 0 {
+                    separator
+                }
+                tally(entry.value, label: entry.tally.word(for: entry.value), tint: MenuBarStyle.tint(for: entry.tally))
+            }
+            Spacer(minLength: 0)
+        }
     }
 
     private var separator: some View {
@@ -261,7 +268,6 @@ struct FleetCountsView: View {
             Text(label)
                 .foregroundStyle(.secondary)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(value) \(label)")
+        .accessibilityHidden(true)
     }
 }

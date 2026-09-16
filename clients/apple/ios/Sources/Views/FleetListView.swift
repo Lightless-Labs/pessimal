@@ -341,17 +341,23 @@ struct FleetCountsView: View {
             alignment: .leading,
             spacing: 10
         ) {
-            tally(counts.hosts, label: "hosts", tint: .primary)
-            tally(counts.alive, label: "alive", tint: .green)
-            tally(counts.stale, label: "stale", tint: .orange)
-            tally(counts.down, label: "down", tint: .red)
-            tally(counts.unknown, label: "unknown", tint: .secondary)
-            tally(counts.firingAlerts, label: "firing", tint: .red)
-            tally(counts.pendingAlerts, label: "pending", tint: .orange)
+            ForEach(FleetTally.visible(in: counts), id: \.tally) { entry in
+                tally(
+                    entry.value,
+                    label: entry.tally.word(for: entry.value),
+                    tint: FleetStyle.tint(for: entry.tally)
+                )
+            }
         }
-        // Every tally is shown even at zero. A grid whose cells appear and disappear is a grid whose
-        // positions have to be re-read every time; a steady one can be glanced at.
+        // The total and the alive count always; everything else only when it is not zero
+        // (`FleetTally`). Each cell carries its own word, so a number is never read by its position
+        // and a grid that changes shape cannot mislead. The section does get shorter when a fleet
+        // goes healthy, which is the point.
         .monospacedDigit()
+        // Every count is spoken, including the ones the eye is spared: a screen reader cannot see
+        // the gap where "0 down" would have been.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(FleetTally.spokenSummary(of: counts))
     }
 
     private func tally(_ value: UInt32, label: String, tint: Color) -> some View {
@@ -364,7 +370,6 @@ struct FleetCountsView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(value) \(label)")
+        .accessibilityHidden(true)
     }
 }

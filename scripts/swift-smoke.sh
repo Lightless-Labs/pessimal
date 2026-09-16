@@ -532,9 +532,54 @@ func loginItemSmoke() throws {
     }
 }
 
+// Which fleet tallies the summary shows. The rule is shared by both apps (PessimalKit's
+// FleetTally), and this is the only automated place either app's Swift is exercised.
+func fleetTallySmoke() throws {
+    func counts(
+        hosts: UInt32 = 0, alive: UInt32 = 0, stale: UInt32 = 0, down: UInt32 = 0,
+        unknown: UInt32 = 0, firing: UInt32 = 0, pending: UInt32 = 0
+    ) -> FleetCountsRecord {
+        FleetCountsRecord(
+            hosts: hosts, alive: alive, stale: stale, down: down, unknown: unknown,
+            firingAlerts: firing, pendingAlerts: pending
+        )
+    }
+    func shown(_ counts: FleetCountsRecord) -> [String] {
+        FleetTally.visible(in: counts).map { "\($0.value) \($0.tally.word(for: $0.value))" }
+    }
+
+    try check(shown(counts(hosts: 1, alive: 1)) == ["1 host", "1 alive"],
+              "a healthy fleet shows the total and the alive count, and nothing at zero")
+    try check(shown(counts(hosts: 3, alive: 1, stale: 2)) == ["3 hosts", "1 alive", "2 stale"],
+              "a tally that is not zero appears, in its fixed place")
+    try check(shown(counts()) == ["0 hosts", "0 alive"],
+              "an empty fleet still reads as a fleet rather than as nothing")
+    try check(shown(counts(hosts: 2, alive: 1, down: 1, firing: 3)).last == "3 firing",
+              "alert tallies appear when they fire")
+    try check(FleetTally.visible(in: counts(hosts: 9, alive: 9)).allSatisfy { !$0.tally.isAlertTally },
+              "and not otherwise, so the alerts line can be dropped whole")
+
+    // The plural is here rather than in each app, because it is the decision that already rotted:
+    // both apps used to say "1 hosts".
+    try check(FleetTally.hosts.word(for: 1) == "host" && FleetTally.hosts.word(for: 0) == "hosts",
+              "one host is a host")
+
+    // Every tally belongs to exactly one of the two macOS rows.
+    let liveness = FleetTally.allCases.filter { !$0.isAlertTally }
+    let alerts = FleetTally.allCases.filter(\.isAlertTally)
+    try check(liveness.count + alerts.count == FleetTally.allCases.count && !alerts.isEmpty,
+              "the liveness row and the alerts row together hold every tally")
+
+    // Hiding a zero hides its cell from VoiceOver, so the container speaks all seven.
+    let spoken = FleetTally.spokenSummary(of: counts(hosts: 1, alive: 1))
+    try check(spoken.contains("0 down") && spoken.contains("0 stale") && spoken.hasPrefix("1 host,"),
+              "what is not shown is still spoken")
+}
+
 do {
     try MainActor.assumeIsolated { try syncSmoke() }
     try loginItemSmoke()
+    try fleetTallySmoke()
 } catch {
     print("FAILED: \(error)")
     exit(1)
