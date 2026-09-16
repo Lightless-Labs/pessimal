@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.4.0 - 2026-09-16
+#### Features
+- (**agent**) set the agent up with `pessimal-agent init` - (8824488) - El-Fitz, *Claude Opus 5*
+#### Bug Fixes
+- (**agent**) move the CLI tests below the code they test - (5ab6db9) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.3.0 - 2026-09-16
 #### Features
 - (**apps**) add "Open Pessimal at login" to macOS settings - (f066f41) - El-Fitz, *Claude Opus 5*
