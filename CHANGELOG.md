@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.2.0 - 2026-09-16
+#### Features
+- (**release**) publish a Homebrew cask for the menu bar app - (ceff08f) - El-Fitz, *Claude Opus 5*
+#### Documentation
+- (**handoff**) record the first published release, v0.1.2 - (23bb4fb) - El-Fitz, *Claude Opus 5*
+- correct the release and Gatekeeper docs after v0.1.2 - (41acd7c) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.1.2 - 2026-09-15
 #### Bug Fixes
 - (**release**) pin cargo-zigbuild 0.23.4 for Rust 1.98's aarch64 link flag - (7d59794) - El-Fitz, *Claude Opus 5*
