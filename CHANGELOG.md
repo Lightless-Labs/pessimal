@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.5.1 - 2026-09-16
+#### Bug Fixes
+- (**agent**) find the config init wrote, and refuse the SigNoz console - (87d5778) - El-Fitz, *Claude Opus 5*
+- (**apps**) restore the iOS settings status section's @ViewBuilder - (acb3ea9) - El-Fitz, *Claude Opus 5*
+- (**apps**) stop the macOS dropdown squeezing its host list to nothing - (aad311e) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.5.0 - 2026-09-16
 #### Features
 - (**apps**) show only the fleet tallies that are not zero - (98ad3dc) - El-Fitz, *Claude Opus 5*
