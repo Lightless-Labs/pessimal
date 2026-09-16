@@ -133,6 +133,7 @@ struct HostDetailView: View {
                     systemImage: FleetStyle.symbolName(for: host.severity)
                 )
                 .foregroundStyle(FleetStyle.tint(for: host.severity))
+                .modifier(OneLineValue())
             }
 
             LabeledContent("Liveness") {
@@ -140,6 +141,7 @@ struct HostDetailView: View {
                     FleetStyle.name(for: host.liveness),
                     systemImage: FleetStyle.symbolName(for: host.liveness)
                 )
+                .modifier(OneLineValue())
             }
 
             LabeledContent("Last heartbeat") {
@@ -418,5 +420,22 @@ struct HostDetailView: View {
         } catch {
             forgetError = FleetModel.message(for: error)
         }
+    }
+}
+
+/// Keeps a `LabeledContent` value on one line.
+///
+/// `LabeledContent`'s automatic style gives its value slot a narrow width, and a `Label` — an icon
+/// and text, not a plain `Text` — takes that proposal literally and wraps. "No heartbeat yet", the
+/// name core's `Unknown` liveness gets, then stands three or four lines tall beside a one-word
+/// label. Both rows here use the same construct, so both are pinned.
+///
+/// Shrinking rather than truncating: at an accessibility text size a hard `lineLimit(1)` alone
+/// turns the value into "No heartb…", which is worse than a slightly smaller word.
+private struct OneLineValue: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
     }
 }
