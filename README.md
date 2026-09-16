@@ -105,8 +105,7 @@ are in [`packaging/tarball/README.md`](packaging/tarball/README.md).
 
 ## Install a release
 
-After the first release, each [GitHub release](https://github.com/Lightless-Labs/pessimal/releases) has
-these files:
+Each [GitHub release](https://github.com/Lightless-Labs/pessimal/releases) has these files:
 
 | File | For |
 |---|---|
@@ -131,6 +130,19 @@ tar -xzf pessimal-agent-<version>-<target>.tar.gz
 
 On macOS, `scripts/install-agent-launchd.sh --tarball <file>` installs a downloaded tarball as a
 service.
+
+Install the menu bar app with Homebrew, which also updates it on `brew upgrade`:
+
+```bash
+brew install --cask lightless-labs/tap/pessimal
+open /Applications/Pessimal.app
+```
+
+Or download `Pessimal-<version>-macos.zip` from the release, unzip it, and move `Pessimal.app` to
+Applications. It needs Apple silicon and macOS 14 or later. It has no Dock icon and no window: click
+the icon in the menu bar, open Settings, and set the backend address, the API key and the
+environment. A downloaded copy opens without a Gatekeeper warning, because the app is notarized and
+its ticket is stapled.
 
 To publish a release, follow [`docs/runbooks/cutting-a-release.md`](docs/runbooks/cutting-a-release.md).
 

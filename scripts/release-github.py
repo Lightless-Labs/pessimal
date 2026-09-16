@@ -5,7 +5,7 @@ Usage:
 
     scripts/release-github.py publish --tag v0.2.0 --dist DIR [--notes-file FILE] [--expect-commit SHA]
     scripts/release-github.py promote --tag v0.2.0 [--skip-formula]
-    scripts/release-github.py bump-formula --tag v0.2.0
+    scripts/release-github.py bump-formula --tag v0.2.0 [--template T --tap-path P --package NAME]
 
 `publish` is the `release-publish` Buildkite step, `promote` is `release-promote`, and `bump-formula`
 is the tail of `promote` on its own, for re-running by hand after a tap failure.
@@ -40,17 +40,20 @@ Why it is shaped this way:
 * **Asset names come from scripts/release-manifest.sh,** never from this file, so the publisher, the
   producers and the verifier cannot disagree about what a release contains.
 
-* **The Homebrew formula bump is best-effort,** exactly as Descartes does it: by the time it runs the
-  release is already latest, so a tap failure prints the manual bump and exits 0 rather than reddening
-  a release that shipped. The formula is rendered from packaging/homebrew/pessimal-agent.rb.template,
-  whose placeholders are:
+* **The Homebrew bump is best-effort,** exactly as Descartes does it: by the time it runs the release
+  is already latest, so a tap failure prints the manual bump and exits 0 rather than reddening a
+  release that shipped. Two files are rendered and pushed independently, the agent's formula from
+  packaging/homebrew/pessimal-agent.rb.template and the menu bar app's cask from
+  packaging/homebrew/pessimal.rb.template. Their placeholders are:
 
       @VERSION@   0.2.0              @TAG@   v0.2.0              @REPO@   Lightless-Labs/pessimal
       @SHA256_<TRIPLE>@  the SHA256SUMS hash of pessimal-agent-<version>-<triple>.tar.gz, with the
                          triple upper-cased and `-` turned into `_`, e.g. @SHA256_AARCH64_APPLE_DARWIN@
       @SHA256_MACOS_APP@ the hash of Pessimal-<version>-macos.zip
 
-  A rendered formula that still contains an @NAME@ placeholder is never pushed.
+  A rendered file that still contains an @NAME@ placeholder is never pushed. That is what stops a
+  cask from being written for a release with no app asset: @SHA256_MACOS_APP@ has no value, so the
+  render fails and only the formula lands.
 
 The Buildkite step runs this as `python3 scripts/release-github.py ...`, so the step command, not this
 file, is what must first check that python3 exists in the guest image.
@@ -76,11 +79,20 @@ import urllib.request
 REPO = "Lightless-Labs/pessimal"
 TAP_REPO = "Lightless-Labs/homebrew-tap"
 FORMULA_PATH = "Formula/pessimal-agent.rb"
+CASK_PATH = "Casks/pessimal.rb"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANIFEST = os.path.join(ROOT, "scripts", "release-manifest.sh")
 NOTES = os.path.join(ROOT, "scripts", "release-notes.sh")
 FORMULA_TEMPLATE = os.path.join(ROOT, "packaging", "homebrew", "pessimal-agent.rb.template")
+CASK_TEMPLATE = os.path.join(ROOT, "packaging", "homebrew", "pessimal.rb.template")
+
+# What `promote` pushes to the tap, in order: (template, path in the tap, the name in a commit
+# message). Each is best-effort and independent -- the cask failing does not stop the formula.
+TAP_FILES = (
+    (FORMULA_TEMPLATE, FORMULA_PATH, "pessimal-agent"),
+    (CASK_TEMPLATE, CASK_PATH, "pessimal"),
+)
 
 GITHUB_API = "https://api.github.com"
 GITHUB_HOSTS = ("api.github.com", "uploads.github.com")
@@ -811,9 +823,10 @@ def cmd_promote(args, credentials):
     say("ok    /releases/latest resolves to %s: %s" % (args.tag, release.get("html_url")))
 
     if args.skip_formula:
-        say("SKIP  Homebrew formula bump: --skip-formula")
+        say("SKIP  Homebrew formula and cask bump: --skip-formula")
         return 0
-    bump_formula(gh, args.tag, version, release, FORMULA_TEMPLATE)
+    for template_path, tap_path, package in TAP_FILES:
+        bump_tap_file(gh, args.tag, version, release, template_path, tap_path, package)
     return 0
 
 
@@ -845,63 +858,77 @@ def render_formula(template_path, tag, version, digests):
     return text
 
 
-def bump_formula(gh, tag, version, release, template_path):
-    """Best-effort. Returns True when the tap holds the formula for this release, False otherwise."""
+def kind_of(tap_path):
+    """"cask" or "formula", from where the file sits in the tap."""
+    return "cask" if tap_path.startswith("Casks/") else "formula"
+
+
+def bump_tap_file(gh, tag, version, release, template_path, tap_path, package):
+    """Best-effort. Returns True when the tap holds `tap_path` for this release, False otherwise."""
     manual = ("bump by hand: render %s for %s and commit it as %s in https://github.com/%s"
-              % (os.path.relpath(template_path, ROOT), tag, FORMULA_PATH, TAP_REPO))
+              % (os.path.relpath(template_path, ROOT), tag, tap_path, TAP_REPO))
     try:
         if not os.path.isfile(template_path):
-            warn("no formula template at %s; skipping the Homebrew bump. %s" % (template_path, manual))
+            warn("no template at %s; skipping the %s bump. %s" % (template_path, tap_path, manual))
             return False
         sums_assets = [a for a in release_assets(gh, release["id"]) if a["name"] == SUMS]
         if len(sums_assets) != 1:
             die("the release has %d %s assets" % (len(sums_assets), SUMS))
         digests = parse_sums(gh.download_asset(sums_assets[0]["id"]).decode("utf-8"), "%s on %s" % (SUMS, tag))
         rendered = render_formula(template_path, tag, version, digests)
-        path = "/repos/%s/contents/%s" % (TAP_REPO, urllib.parse.quote(FORMULA_PATH))
+        kind = kind_of(tap_path)
+        path = "/repos/%s/contents/%s" % (TAP_REPO, urllib.parse.quote(tap_path))
         for attempt in range(2):
             status, current = gh.call("GET", path, allow=(404,))
             payload = {"content": base64.b64encode(rendered.encode()).decode()}
             if status == 404:
-                payload["message"] = "pessimal-agent %s (new formula)" % version
+                payload["message"] = "%s %s (new %s)" % (package, version, kind)
             else:
                 if base64.b64decode(current["content"]).decode("utf-8") == rendered:
-                    say("ok    %s/%s is already current for %s; no bump needed" % (TAP_REPO, FORMULA_PATH, tag))
+                    say("ok    %s/%s is already current for %s; no bump needed" % (TAP_REPO, tap_path, tag))
                     return True
-                payload["message"] = "pessimal-agent: update to %s" % version
+                payload["message"] = "%s: update to %s" % (package, version)
                 payload["sha"] = current["sha"]
             put_status, _headers, body = gh.request("PUT", path, data=json.dumps(payload).encode())
             if put_status in (200, 201):
                 commit = json.loads(body.decode("utf-8")).get("commit", {}).get("sha", "")[:9]
                 say("ok    %s %s/%s for %s: commit %s"
-                    % ("created" if status == 404 else "updated", TAP_REPO, FORMULA_PATH, tag, commit))
+                    % ("created" if status == 404 else "updated", TAP_REPO, tap_path, tag, commit))
                 return True
             # 409: the file changed under us. 422: it was created between the GET and the PUT. Both mean
             # "read it again", once.
             if put_status in (409, 422) and attempt == 0:
-                warn("the tap formula changed concurrently (HTTP %d); re-reading once" % put_status)
+                warn("%s changed concurrently (HTTP %d); re-reading once" % (tap_path, put_status))
                 continue
-            die("PUT %s answered HTTP %d: %s" % (FORMULA_PATH, put_status, _excerpt(body)))
-        die("the tap formula update conflicted twice")
+            die("PUT %s answered HTTP %d: %s" % (tap_path, put_status, _excerpt(body)))
+        die("the %s update conflicted twice" % tap_path)
     except Exception as exc:  # best-effort means every failure, including the unforeseen ones
-        warn("Homebrew formula bump FAILED: %s: %s" % (type(exc).__name__, redact(exc)))
-        warn("the release itself is published and promoted; only the tap is stale for %s. %s" % (tag, manual))
+        warn("Homebrew %s bump FAILED: %s: %s" % (kind_of(tap_path), type(exc).__name__, redact(exc)))
+        warn("the release itself is published and promoted; only %s is stale for %s. %s"
+             % (tap_path, tag, manual))
         return False
 
 
 def cmd_bump_formula(args, credentials):
     version, _numbers = version_of(args.tag)
-    template = args.template or FORMULA_TEMPLATE
+    # Named arguments override the pair for one file; with none of them, both are bumped, as promote does.
+    if args.template or args.tap_path or args.package:
+        if not (args.template and args.tap_path and args.package):
+            die("--template, --tap-path and --package go together: pass all three, or none for both tap files")
+        targets = ((args.template, args.tap_path, args.package),)
+    else:
+        targets = TAP_FILES
     gh = github_client(credentials, "bump-formula")
     release = published_release(gh, args.tag)
     if release is None or release.get("prerelease"):
-        die("%s is not a promoted release; the formula only ever points at a release that passed release-verify"
+        die("%s is not a promoted release; the tap only ever points at a release that passed release-verify"
             % args.tag)
     latest = latest_release(gh)
     if latest is None or latest.get("id") != release["id"]:
-        die("%s is not /releases/latest (that is %s); bumping the formula to it would move the tap backwards"
+        die("%s is not /releases/latest (that is %s); bumping the tap to it would move it backwards"
             % (args.tag, latest.get("tag_name") if latest else "nothing"))
-    return 0 if bump_formula(gh, args.tag, version, release, template) else 1
+    done = [bump_tap_file(gh, args.tag, version, release, *target) for target in targets]
+    return 0 if all(done) else 1
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -924,13 +951,16 @@ def parse_args(argv):
     publish.add_argument("--expect-commit",
                          help="refuse unless the tag points at this commit (default: BUILDKITE_COMMIT when set)")
 
-    promote = commands.add_parser("promote", help="prerelease -> latest, then the best-effort formula bump")
+    promote = commands.add_parser("promote", help="prerelease -> latest, then the best-effort tap bump")
     promote.add_argument("--tag", required=True, help="the release tag, e.g. v0.2.0")
     promote.add_argument("--skip-formula", action="store_true", help="do not touch the Homebrew tap")
 
-    bump = commands.add_parser("bump-formula", help="render and push Formula/pessimal-agent.rb for a promoted release")
+    bump = commands.add_parser("bump-formula",
+                               help="render and push %s and %s for a promoted release" % (FORMULA_PATH, CASK_PATH))
     bump.add_argument("--tag", required=True, help="the release tag, e.g. v0.2.0")
-    bump.add_argument("--template", help="formula template (default packaging/homebrew/pessimal-agent.rb.template)")
+    bump.add_argument("--template", help="one template to render instead of both defaults")
+    bump.add_argument("--tap-path", help="where that render goes in the tap, e.g. %s" % CASK_PATH)
+    bump.add_argument("--package", help="the name that render gets in its commit message, e.g. pessimal")
     return parser.parse_args(argv)
 
 

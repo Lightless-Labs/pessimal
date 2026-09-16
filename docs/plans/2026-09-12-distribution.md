@@ -163,10 +163,15 @@ target.
    version and pushes the tag. The app's signing path (`scripts/release-macos-artifacts.sh`, through
    the same library as `scripts/release-macos-app.sh`) runs in CI for the first time. Ends with mise
    and Homebrew working. Windows is deferred.
-2. **The cask.** A cask for the app in `Lightless-Labs/homebrew-tap`. It needs the app to be universal
-   or to declare `depends_on arch: :arm64`, since the app is Apple silicon only today. The formula, with
-   decision 4's overlap caveat, is built in phase 1. `scripts/install-agent-launchd.sh` noticing a
-   brew-managed service is not built.
+2. **The cask.** *Built 2026-09-16; it reaches the tap on the next release.*
+   `packaging/homebrew/pessimal.rb.template` renders `Casks/pessimal.rb` through the same
+   `release-promote` step as the formula, and declares `depends_on arch: :arm64` and
+   `depends_on macos: :sonoma` because the app is Apple silicon only and its `LSMinimumSystemVersion`
+   is 14.0. Checked against the v0.1.2 release on 2026-09-16 in a local clone of the tap: `brew style`
+   and `brew audit --cask --online` pass, `brew install --cask` installs the app, `brew livecheck`
+   resolves the version, and `brew uninstall --cask --zap` removes it. Homebrew marks a cask download
+   with `com.apple.quarantine`, and Gatekeeper still accepts the installed app from its stapled ticket.
+   `scripts/install-agent-launchd.sh` noticing a brew-managed service is not built.
 3. **The flake**, with the NixOS module.
 4. **`nfpm` packages**, `winget`/`scoop` if anyone asks, and Sparkle for in-app macOS updates.
 
@@ -178,5 +183,5 @@ target.
 - Sign the Linux artefacts too (minisign or cosign), or let `SHA256SUMS` on a tagged release stand?
 - A stapled `.pkg` for the macOS agent, which needs a Developer ID Installer certificate. See
   [`todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md`](../../todos/008-pending-p3-stapled-pkg-for-the-macos-agent.md).
-- The macOS app has no update mechanism at all once installed. A cask updates on `brew upgrade`; a
-  hand-downloaded zip never does. Sparkle or accept it?
+- ~~The macOS app has no update mechanism at all once installed~~ — the cask updates it on
+  `brew upgrade`. A hand-downloaded zip still never does. Sparkle for that, or accept it?

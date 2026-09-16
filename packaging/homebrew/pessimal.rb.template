@@ -1,0 +1,58 @@
+# Casks/pessimal.rb in Lightless-Labs/homebrew-tap is rendered from this file.
+#
+# Its source is packaging/homebrew/pessimal.rb.template in Lightless-Labs/pessimal. The
+# release-promote Buildkite step fills in the version, the tag and the app's line from the release's
+# SHA256SUMS (scripts/release-github.py, render_formula), and commits the result to the tap through
+# the GitHub Contents API -- only after both release-verify steps have downloaded and checked what
+# GitHub serves. Edit the template, not the tap: a hand edit there is overwritten by the next
+# release. Every placeholder must be one render_formula knows, or the rendered cask is refused
+# rather than pushed, so do not write anything shaped like one in these comments.
+#
+# This is the one channel where Gatekeeper is involved. Homebrew marks a cask download with
+# com.apple.quarantine, unlike a formula's, so macOS checks the app the first time it opens.
+# Pessimal.app is notarized and stapled, so that check passes with no network access.
+# packaging/macos/GATEKEEPER.md has the rest.
+cask "pessimal" do
+  version "@VERSION@"
+  sha256 "@SHA256_MACOS_APP@"
+
+  # The version is interpolated rather than rendered into this line, and the tag is `v` plus the
+  # version because scripts/release-guard.sh refuses a tag that disagrees with the workspace version.
+  # `brew audit` reads this line as text and asks for `sha256 :no_check` on a URL with no `#{...}` in
+  # it (Cask::URL#unversioned?), so a rendered-in version number would fail the audit.
+  url "https://github.com/@REPO@/releases/download/v#{version}/Pessimal-#{version}-macos.zip"
+  name "Pessimal"
+  desc "Menu bar app that shows host metrics from your telemetry backend"
+  homepage "https://github.com/@REPO@"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  # The app is built for Apple silicon only, and its LSMinimumSystemVersion is 14.0. A bare version
+  # symbol is a minimum: Homebrew parses it with a ">=" comparator (Cask::DSL::DependsOn#macos=).
+  depends_on arch: :arm64
+  depends_on macos: :sonoma
+
+  app "Pessimal.app"
+
+  # It is a menu bar app with no window, so a running copy is easy to miss. Without this, an upgrade
+  # or an uninstall would leave the old build running.
+  uninstall quit: "com.lightless-labs.pessimal.macos"
+
+  # Everything the app writes, from PessimalKit: UserDefaults (the settings and the sync replica),
+  # the fleet state cache under Application Support (FileFleetStateStore.defaultDirectoryName), and
+  # what AppKit writes for any app.
+  #
+  # The backend API key is not here. It is a keychain item under the service
+  # com.lightless-labs.pessimal.macos (KeychainAPIKeyStore.defaultService), and a cask cannot remove
+  # a keychain item. Delete it in Keychain Access, or with:
+  #   security delete-generic-password -s com.lightless-labs.pessimal.macos
+  zap trash: [
+    "~/Library/Application Support/com.lightless-labs.pessimal.macos",
+    "~/Library/Caches/com.lightless-labs.pessimal.macos",
+    "~/Library/Preferences/com.lightless-labs.pessimal.macos.plist",
+    "~/Library/Saved Application State/com.lightless-labs.pessimal.macos.savedState",
+  ]
+end

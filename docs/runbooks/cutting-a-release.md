@@ -27,7 +27,7 @@ release-guard ─┬─► release-linux ─────────────
 | `release-publish` | Linux | Doppler | Uploads everything to a draft release, downloads it back, checks the hashes, writes `SHA256SUMS`, and publishes a prerelease. |
 | `release-verify-linux` | Linux | none | Downloads the release without a token, checks it, and runs the arm64 Linux agent. |
 | `release-verify-macos` | macOS | none | The same, plus signatures, notarization, the app's stapled ticket, and the macOS agents. |
-| `release-promote` | Linux | Doppler | Marks the release as latest and updates the Homebrew formula. |
+| `release-promote` | Linux | Doppler | Marks the release as latest, then updates the Homebrew formula for the agent and the cask for the app. |
 
 A release starts as a draft, becomes a prerelease, and becomes the latest release only after both verify
 steps pass. Nothing in the pipeline moves a release back.
@@ -130,7 +130,7 @@ already exists.
 | `answered HTTP 403` or `HTTP 404` on a GitHub call | The GitHub token cannot write, or has expired | Fix the token, update it in Doppler, Retry. |
 | `the artifacts under .build/release/dist are not exactly the release` | A build step uploaded too few or too many files | Retry the build step, then this step. |
 | `FAIL  could not download …` | GitHub is slow to serve the new files | Retry the verify step. |
-| `warning: Homebrew formula bump FAILED` | The release is out. Only the formula is old. | Retry `release-promote`. |
+| `warning: Homebrew formula bump FAILED` or `cask bump FAILED` | The release is out. Only that tap file is old. | Retry `release-promote`, or run `scripts/release-github.py bump-formula --tag vX.Y.Z`. |
 
 ### Wipe a release
 
@@ -199,5 +199,5 @@ Put the new value in place before you revoke the old one.
 
 Delete old GitHub tokens at <https://github.com/settings/personal-access-tokens>.
 
-Work that is not in this release (Windows, musl, `.deb`, crates.io, a cask for the app) is listed in
+Work that is not in this release (Windows, musl, `.deb`, crates.io) is listed in
 [`docs/plans/2026-09-12-distribution.md`](../plans/2026-09-12-distribution.md).
