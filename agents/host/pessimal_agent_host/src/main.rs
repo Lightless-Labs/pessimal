@@ -257,6 +257,20 @@ fn environment() -> BTreeMap<String, String> {
     std::env::vars().collect()
 }
 
+/// The system hostname, or a placeholder that is obviously wrong rather than plausibly wrong.
+fn detect_host_name() -> String {
+    match hostname::get() {
+        Ok(name) => name.to_string_lossy().into_owned(),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "could not read the system hostname; set resource.host_name in the config"
+            );
+            "unknown-host".to_owned()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,19 +295,5 @@ mod tests {
         let named =
             Cli::try_parse_from(["pessimal-agent", "--config", "/tmp/x.toml"]).expect("parses");
         assert_eq!(named.config, Some(PathBuf::from("/tmp/x.toml")));
-    }
-}
-
-/// The system hostname, or a placeholder that is obviously wrong rather than plausibly wrong.
-fn detect_host_name() -> String {
-    match hostname::get() {
-        Ok(name) => name.to_string_lossy().into_owned(),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "could not read the system hostname; set resource.host_name in the config"
-            );
-            "unknown-host".to_owned()
-        }
     }
 }
