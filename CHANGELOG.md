@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.3.0 - 2026-09-16
+#### Features
+- (**apps**) add "Open Pessimal at login" to macOS settings - (f066f41) - El-Fitz, *Claude Opus 5*
+- (**apps**) give the macOS app an icon - (0cafbbe) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.2.0 - 2026-09-16
 #### Features
 - (**release**) publish a Homebrew cask for the menu bar app - (ceff08f) - El-Fitz, *Claude Opus 5*
