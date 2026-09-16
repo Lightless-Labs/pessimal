@@ -269,17 +269,6 @@ public struct SettingsView: View {
     /// `lastPersistenceError` matters more than it looks: `FleetModel.applyConfig` swallows a failed
     /// write into that property rather than throwing, so a config that reached core but never
     /// reached the disk would look like a clean save and quietly revert on the next launch.
-    /// Which build this is.
-    ///
-    /// Here as well as in the menu's footer because a person reporting something is as likely to
-    /// have Settings open as the menu, and "which version?" is the first question either way.
-    @ViewBuilder
-    private var aboutSection: some View {
-        Section("About") {
-            LabeledContent("Version", value: AppVersion.fromBundle().display)
-        }
-    }
-
     @ViewBuilder
     private var statusSection: some View {
         let sessionProblem: String? = {
@@ -316,6 +305,16 @@ public struct SettingsView: View {
                     )
                 }
             }
+        }
+    }
+
+    /// Which build this is.
+    ///
+    /// Here as well as in the menu's footer because a person reporting something is as likely to
+    /// have Settings open as the menu, and "which version?" is the first question either way.
+    private var aboutSection: some View {
+        Section("About") {
+            LabeledContent("Version", value: AppVersion.fromBundle().display)
         }
     }
 

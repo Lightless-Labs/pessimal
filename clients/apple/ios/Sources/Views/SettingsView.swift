@@ -300,16 +300,6 @@ struct SettingsView: View {
     /// write into that property rather than throwing, so a config that reached core but never reached
     /// the disk would look like a clean save and quietly revert on the next launch.
     @ViewBuilder
-    /// Which build this is. First question anyone asks about a bug, and the iOS app versions
-    /// separately from the Mac app — every green push reaches TestFlight, so the build counter is
-    /// the part that identifies it.
-    @ViewBuilder
-    private var aboutSection: some View {
-        Section("About") {
-            LabeledContent("Version", value: AppVersion.fromBundle().display)
-        }
-    }
-
     private var statusSection: some View {
         let sessionProblem: String? = {
             if case let .unusable(message) = model.sessionState { return message }
@@ -369,6 +359,15 @@ struct SettingsView: View {
     // MARK: - Actions
 
     @ViewBuilder
+    /// Which build this is. First question anyone asks about a bug, and the iOS app versions
+    /// separately from the Mac app — every green push reaches TestFlight, so the build counter is
+    /// the part that identifies it.
+    private var aboutSection: some View {
+        Section("About") {
+            LabeledContent("Version", value: AppVersion.fromBundle().display)
+        }
+    }
+
     private func actionsSection(_ candidate: Result<FleetConfigRecord, any Error>) -> some View {
         Section {
             // Core's refusal of the draft, shown where the user is about to press Save rather than
