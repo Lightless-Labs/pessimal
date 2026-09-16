@@ -5,6 +5,7 @@
 //! keep it alive and to shut it down cleanly.
 
 mod host_collector;
+mod init;
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
@@ -13,7 +14,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use chrono::Duration;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use host_collector::HostCollector;
 use pessimal_agent_core::collector::CachedCollector;
 use pessimal_agent_core::config::AgentConfig;
@@ -32,8 +33,12 @@ const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 )]
 struct Cli {
     /// Path to the TOML configuration file.
-    #[arg(short, long, env = "PESSIMAL_CONFIG", default_value = "pessimal.toml")]
-    config: PathBuf,
+    ///
+    /// Optional rather than defaulted, because `init` needs to tell "the user named a path" from
+    /// "nobody said": with a default it could not, and would write beside the working directory
+    /// instead of where the service reads.
+    #[arg(short, long, env = "PESSIMAL_CONFIG")]
+    config: Option<PathBuf>,
 
     /// Validate the configuration, print what would be exported, and exit without connecting.
     #[arg(long)]
@@ -42,17 +47,41 @@ struct Cli {
     /// Take one sample and print it, then exit. Does not export.
     #[arg(long)]
     sample: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
 }
+
+/// What the agent does instead of running.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Set the agent up: ask where to send metrics, write the config, test it, start the service.
+    Init(init::InitArgs),
+}
+
+/// Where the config is read from when no `--config` and no `PESSIMAL_CONFIG` were given.
+const DEFAULT_CONFIG_FILE: &str = "pessimal.toml";
 
 fn main() -> ExitCode {
     // A daemon logs to stderr, and only colours it when something is there to read it.
-    tracing_subscriber::fmt()
+    //
+    // Two layers, each with its own filter, rather than one global filter: `init`'s export check
+    // needs the exporter's DEBUG events to report why a backend refused a batch, and those must
+    // not also appear on a user's terminal. PESSIMAL_LOG still decides what is printed.
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let printed = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
-        .with_env_filter(
+        .with_filter(
             tracing_subscriber::EnvFilter::try_from_env("PESSIMAL_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+        );
+    tracing_subscriber::registry()
+        .with(printed)
+        .with(init::export_diagnostics_layer())
         .init();
 
     match run(&Cli::parse()) {
@@ -65,7 +94,15 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<()> {
-    let mut config = AgentConfig::from_file(&cli.config)?;
+    if let Some(Command::Init(args)) = &cli.command {
+        return init::run(cli.config.clone(), args);
+    }
+
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE));
+    let mut config = AgentConfig::from_file(&config_path)?;
     config.apply_env(&environment())?;
 
     if cli.sample {
@@ -218,6 +255,33 @@ fn print_sample(config: &AgentConfig) -> Result<()> {
 /// The process environment as a plain map, so config override logic stays pure.
 fn environment() -> BTreeMap<String, String> {
     std::env::vars().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn there_is_no_api_key_argument() {
+        // A key on the command line is visible in `ps` to every user on the machine, so `init`
+        // takes it from a prompt or from stdin. This is the test that keeps someone from adding
+        // the "convenient" flag back.
+        Cli::try_parse_from(["pessimal-agent", "init", "--api-key", "secret"])
+            .expect_err("--api-key must not exist");
+        Cli::try_parse_from(["pessimal-agent", "init", "--api-key-stdin"])
+            .expect("--api-key-stdin is how a script passes one");
+    }
+
+    #[test]
+    fn the_config_path_is_absent_rather_than_defaulted() {
+        // `init` tells "the user named a path" from "nobody said" by this being None, and writes
+        // where the service reads instead of beside the working directory.
+        let cli = Cli::try_parse_from(["pessimal-agent"]).expect("parses");
+        assert_eq!(cli.config, None);
+        let named =
+            Cli::try_parse_from(["pessimal-agent", "--config", "/tmp/x.toml"]).expect("parses");
+        assert_eq!(named.config, Some(PathBuf::from("/tmp/x.toml")));
+    }
 }
 
 /// The system hostname, or a placeholder that is obviously wrong rather than plausibly wrong.

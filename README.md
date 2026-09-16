@@ -120,13 +120,34 @@ Install the agent with Homebrew or mise, or from a tarball:
 
 ```bash
 brew install lightless-labs/tap/pessimal-agent
-brew services start pessimal-agent
 
 mise use -g github:Lightless-Labs/pessimal
 
 shasum -a 256 -c --ignore-missing SHA256SUMS
 tar -xzf pessimal-agent-<version>-<target>.tar.gz
 ```
+
+Then set it up:
+
+```bash
+pessimal-agent init
+```
+
+`init` asks where to send metrics, which environment this host belongs to, and for the API key,
+which it does not echo. It writes the config where the service on this machine reads it, at mode
+0600, sends one batch to check the backend accepts it, and offers to start the service. Run it again
+to change any answer; the previous config is kept as `pessimal.toml.bak`.
+
+For a configuration management tool, the same without questions:
+
+```bash
+pessimal-agent init --non-interactive --preset signoz \
+  --endpoint https://ingest.eu2.signoz.cloud:443 --environment production \
+  --api-key-stdin < key.txt
+```
+
+There is no `--api-key` flag on purpose: command-line arguments are visible in `ps` to everyone on
+the machine.
 
 On macOS, `scripts/install-agent-launchd.sh --tarball <file>` installs a downloaded tarball as a
 service.

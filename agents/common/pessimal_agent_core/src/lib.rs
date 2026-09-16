@@ -8,6 +8,7 @@ pub mod collector;
 pub mod config;
 pub mod error;
 pub mod export;
+pub mod onboarding;
 pub mod preset;
 pub mod resource;
 

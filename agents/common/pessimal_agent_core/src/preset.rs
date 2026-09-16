@@ -110,6 +110,20 @@ impl BackendPreset {
         }
     }
 
+    /// The name this preset is written as in a config file, which is what serde reads and writes.
+    ///
+    /// Not [`BackendPreset::display_name`]: that is for a person ("SigNoz"), this is for the file
+    /// ("signoz"), and rendering a config with the wrong one produces a file that will not parse.
+    #[must_use]
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Otlp => "otlp",
+            Self::Signoz => "signoz",
+            Self::Clickstack => "clickstack",
+            Self::Honeycomb => "honeycomb",
+        }
+    }
+
     /// A short display name.
     #[must_use]
     pub fn display_name(self) -> &'static str {
@@ -205,6 +219,23 @@ impl fmt::Display for BackendPreset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_preset_round_trips_through_its_wire_name() {
+        for preset in [
+            BackendPreset::Otlp,
+            BackendPreset::Signoz,
+            BackendPreset::Clickstack,
+            BackendPreset::Honeycomb,
+        ] {
+            assert_eq!(
+                preset.wire_name().parse::<BackendPreset>().expect("parses"),
+                preset,
+                "{} does not read back",
+                preset.wire_name()
+            );
+        }
+    }
 
     #[derive(Debug, Serialize, Deserialize)]
     struct Wrapper {

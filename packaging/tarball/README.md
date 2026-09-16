@@ -23,30 +23,39 @@ Look for `OK` next to the name of your archive. `sha256sum` takes the same argum
 
 ## Configure
 
-Copy `pessimal.example.toml` and set `endpoint` and `preset`. Do not put the API key in this file. Set
-it in the `PESSIMAL_API_KEY` environment variable. The top of the example file lists the other
-`PESSIMAL_*` variables.
+```sh
+pessimal-agent init
+```
+
+It asks where to send metrics, which environment this host belongs to, and for the API key, which it
+does not echo. It writes the config where the service on this machine reads it, sends one batch to
+check the backend accepts it, and offers to start the service. Run it again to change an answer; the
+previous config is kept as `pessimal.toml.bak`.
+
+`pessimal.example.toml` lists every field and every `PESSIMAL_*` environment variable, for a config
+you would rather write yourself.
 
 ## Linux
 
 ```sh
 sudo install -m 0755 pessimal-agent /usr/local/bin/pessimal-agent
-sudo mkdir -p /etc/pessimal
-sudo install -m 0644 pessimal.example.toml /etc/pessimal/pessimal.toml
-sudo "$EDITOR" /etc/pessimal/pessimal.toml          # set endpoint and preset
-
-# The key goes in a file that only root can read. systemd reads it before it starts the agent.
-sudo sh -c 'umask 077; printf "PESSIMAL_API_KEY=%s\n" "YOUR-KEY-HERE" > /etc/pessimal/pessimal.env'
-
 sudo install -m 0644 pessimal-agent.service /etc/systemd/system/pessimal-agent.service
-sudo systemctl daemon-reload && sudo systemctl enable --now pessimal-agent
+sudo systemctl daemon-reload
+
+sudo pessimal-agent init
 ```
+
+As root, `init` writes `/etc/pessimal/pessimal.toml` at mode 0644 and puts the key in
+`/etc/pessimal/pessimal.env` at mode 0600. The two files are split because the unit runs the agent
+under `DynamicUser=yes`: that transient account has to read the config, so the key cannot be in it.
+systemd reads the environment file as root. `init` then offers to run
+`systemctl enable --now pessimal-agent`.
 
 See the log with `journalctl -u pessimal-agent -f`. To see the result of each export, add
 `PESSIMAL_LOG=debug` to `/etc/pessimal/pessimal.env`.
 
 The service runs as a temporary user that cannot write to the filesystem. That user must be able to read
-`/etc/pessimal/pessimal.toml`, so keep that file at mode 0644.
+`/etc/pessimal/pessimal.toml`, so keep that file at mode 0644 and the key out of it.
 
 These binaries need glibc 2.28 or later: Debian 10, Ubuntu 18.10 or RHEL 8, or newer. On an older
 system the binary does not start.
@@ -55,9 +64,13 @@ system the binary does not start.
 
 ```sh
 sudo install -m 0755 pessimal-agent /usr/local/bin/pessimal-agent
+pessimal-agent init
 ```
 
-To run it as a service, use `scripts/install-agent-launchd.sh` from the repository.
+On macOS the key goes in the config file, which `init` writes at mode 0600 under
+`~/.config/pessimal/`. To run it as a service, use `scripts/install-agent-launchd.sh` from the
+repository; `init` notices that LaunchAgent if it is already loaded, and does not suggest a second
+one.
 
 The binary is signed and notarized, but macOS must ask Apple about it the first time it runs. On a host
 that cannot reach Apple, the first start can fail, and under launchd you see no error. See

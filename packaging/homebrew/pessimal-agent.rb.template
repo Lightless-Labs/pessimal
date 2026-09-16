@@ -77,16 +77,15 @@ class PessimalAgent < Formula
 
   def caveats
     text = <<~EOS
-      Set the endpoint and preset in:
-        #{etc}/pessimal/pessimal.toml
-      If your backend needs a key, set api_key in that file and make it readable by you alone:
-        chmod 600 #{etc}/pessimal/pessimal.toml
-      Do not give the key to the service as an environment variable: brew services writes the
-      service definition with mode 0644, so other accounts on this machine may be able to read it.
+      Set it up:
+        pessimal-agent init
 
-      Check the config without exporting anything, then start the service:
-        #{opt_bin}/pessimal-agent --config #{etc}/pessimal/pessimal.toml --check
-        brew services start pessimal-agent
+      That asks where to send metrics and for the API key, writes #{etc}/pessimal/pessimal.toml at
+      mode 0600, checks the backend accepts a batch, and offers to start the service.
+
+      The key belongs in that file, not in the service's environment: brew services writes the
+      service definition with mode 0644, so a key there may be readable by other accounts on this
+      machine.
     EOS
     if OS.mac?
       text += <<~EOS

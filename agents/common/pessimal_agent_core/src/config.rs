@@ -226,7 +226,10 @@ impl AgentConfig {
         if let Some(value) = get("HOST_NAME") {
             self.resource.host_name = Some(value.clone());
         }
-        self.validate()
+        self.validate()?;
+        // After the environment has had its say, the credentials must be complete: this is the
+        // moment a missing key is still cheap to report, rather than on the first export.
+        self.validate_credentials()
     }
 
     /// # Errors
@@ -272,7 +275,24 @@ impl AgentConfig {
                 "resource.environment must not contain `::`, the URN separator".to_owned(),
             ));
         }
-        // Surfaces a missing credential at startup rather than on the first export.
+        Ok(())
+    }
+
+    /// Checks that the preset has the credentials it requires.
+    ///
+    /// Separate from [`AgentConfig::validate`], and called *after* [`AgentConfig::apply_env`],
+    /// because a config file is allowed not to carry the key: a container is configured through
+    /// `PESSIMAL_*` variables, and the packaged systemd unit reads the key from a root-only
+    /// `EnvironmentFile` so it stays out of a config the service's transient user can read.
+    ///
+    /// Folding this into `validate` made `from_toml` reject those files outright — measured
+    /// 2026-09-16: a `clickstack` config with no `api_key` failed to parse, so `PESSIMAL_API_KEY`
+    /// could never supply it and the documented environment path worked for no preset that needs a
+    /// credential.
+    ///
+    /// # Errors
+    /// Returns [`AgentError::Config`] if a credential the preset requires is missing.
+    pub fn validate_credentials(&self) -> Result<()> {
         self.export.resolved_headers()?;
         Ok(())
     }
@@ -292,6 +312,41 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn a_key_may_come_from_the_environment_rather_than_the_file() {
+        // The whole point of the PESSIMAL_* overrides: a config file need not carry the secret.
+        let mut config = AgentConfig::from_toml(
+            r#"
+            [export]
+            preset = "clickstack"
+            endpoint = "http://localhost:4317"
+        "#,
+        )
+        .expect("a file without the key parses");
+        config
+            .validate_credentials()
+            .expect_err("but it is not complete on its own");
+
+        config
+            .apply_env(&env(&[("PESSIMAL_API_KEY", "k")]))
+            .expect("the environment completes it");
+        assert_eq!(config.export.api_key.as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn a_preset_that_needs_a_key_still_fails_at_startup_without_one() {
+        let mut config = AgentConfig::from_toml(
+            r#"
+            [export]
+            preset = "clickstack"
+            endpoint = "http://localhost:4317"
+        "#,
+        )
+        .expect("parses");
+        let error = config.apply_env(&env(&[])).expect_err("no key anywhere");
+        assert!(format!("{error}").contains("api_key"), "{error}");
     }
 
     #[test]
@@ -411,7 +466,9 @@ mod tests {
 
     #[test]
     fn validation_catches_a_missing_preset_credential_at_startup() {
-        let error = AgentConfig::from_toml(
+        // The file parses: a missing credential is not a malformed config, and the environment is
+        // allowed to supply it. Startup is where it has to be complete, which `apply_env` is.
+        let mut config = AgentConfig::from_toml(
             r#"
             [export]
             preset = "honeycomb"
@@ -419,7 +476,8 @@ mod tests {
             api_key = "hcaik"
         "#,
         )
-        .expect_err("dataset missing");
+        .expect("parses");
+        let error = config.apply_env(&env(&[])).expect_err("dataset missing");
         assert!(error.to_string().contains("dataset"), "{error}");
     }
 
