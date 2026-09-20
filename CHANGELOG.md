@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.6.0 - 2026-09-20
+#### Features
+- (**agent,apps**) collect and show host temperatures - (ae0f087) - El-Fitz, *Claude Opus 5*
+- (**apps**) ask for a host's detail metrics while its screen is open - (63cf2ae) - El-Fitz, *Claude Opus 5*
+#### Bug Fixes
+- (**clients**) keep series labels on an underscored SigNoz instance - (64e3fc3) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.5.1 - 2026-09-16
 #### Bug Fixes
 - (**agent**) find the config init wrote, and refuse the SigNoz console - (87d5778) - El-Fitz, *Claude Opus 5*

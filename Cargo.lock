@@ -1338,7 +1338,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pessimal_agent_core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "opentelemetry",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_agent_host"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_client_core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_ffi"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "pessimal_client_core",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_query_signoz"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1433,14 +1433,14 @@ dependencies = [
 
 [[package]]
 name = "pessimal_uniffi_bindgen"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "uniffi",
 ]
 
 [[package]]
 name = "pessimal_usage"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "pessimal_usage_otlp"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "pessimal_usage",
