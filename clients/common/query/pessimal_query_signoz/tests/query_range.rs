@@ -381,6 +381,131 @@ async fn underscored_naming_changes_both_the_metric_and_its_labels() {
     assert_eq!(result[0].host, HostId::new("web-1"));
 }
 
+/// An adapter pointed at a pre-v0.88 instance.
+fn underscored_adapter(server: &MockServer) -> SignozQuery {
+    SignozQuery::new(
+        SignozConfig::new(server.uri(), API_KEY)
+            .expect("valid")
+            .with_naming(MetricNaming::Underscored),
+    )
+    .expect("client builds")
+}
+
+#[tokio::test]
+async fn an_underscored_instance_still_names_the_mount() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        &response(&[series(
+            &[
+                ("host_name", json!("web-1")),
+                ("system_filesystem_mountpoint", json!("/data")),
+            ],
+            &[point(1_742_602_572_000, &json!(0.9))],
+        )]),
+    )
+    .await;
+
+    let result = underscored_adapter(&server)
+        .query_series(&SeriesRequest::new(
+            MetricKind::FilesystemUtilization,
+            HostSelector::Host(HostId::new("web-1")),
+            range(),
+            Duration::seconds(60),
+        ))
+        .await
+        .expect("query succeeds");
+
+    assert_eq!(
+        result[0]
+            .attributes
+            .get("system.filesystem.mountpoint")
+            .map(String::as_str),
+        Some("/data"),
+        "an attribute must reach the client under one name whatever the instance calls it"
+    );
+    assert!(
+        !result[0].attributes.contains_key("host_name"),
+        "the host is a field, not a leftover label"
+    );
+}
+
+#[tokio::test]
+async fn an_underscored_instance_still_names_the_temperature_sensor() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        &response(&[series(
+            &[
+                ("host_name", json!("mac-1")),
+                ("hw_id", json!("PMU tdev1")),
+                ("hw_name", json!("PMU tdev1")),
+            ],
+            &[point(1_742_602_572_000, &json!(41.5))],
+        )]),
+    )
+    .await;
+
+    let result = underscored_adapter(&server)
+        .query_series(&SeriesRequest::new(
+            MetricKind::Temperature,
+            HostSelector::Host(HostId::new("mac-1")),
+            range(),
+            Duration::seconds(60),
+        ))
+        .await
+        .expect("query succeeds");
+
+    let body = sent_body(&server).await;
+    let grouped: Vec<&str> = spec(&body)["groupBy"]
+        .as_array()
+        .expect("a groupBy array")
+        .iter()
+        .map(|key| key["name"].as_str().expect("a name"))
+        .collect();
+    assert!(
+        grouped.contains(&"hw_id") && grouped.contains(&"hw_name"),
+        "grouping only by host would average every sensor on the machine into one number: {grouped:?}"
+    );
+
+    assert_eq!(
+        result[0].attributes.get("hw.name").map(String::as_str),
+        Some("PMU tdev1"),
+        "the sensor must reach the client under the name `series_label` looks for"
+    );
+    assert_eq!(
+        result[0].attributes.get("hw.id").map(String::as_str),
+        Some("PMU tdev1")
+    );
+}
+
+#[tokio::test]
+async fn an_underscored_roster_still_carries_the_os_and_the_agent_version() {
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        &response(&[series(
+            &[
+                ("host_name", json!("web-1")),
+                ("os_type", json!("linux")),
+                ("service_version", json!("0.1.0")),
+            ],
+            &[point(1_742_602_572_000, &json!(10.0))],
+        )]),
+    )
+    .await;
+
+    let hosts = underscored_adapter(&server)
+        .list_hosts(range())
+        .await
+        .expect("lists");
+
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].id, HostId::new("web-1"));
+    assert_eq!(hosts[0].os, OsFamily::Linux);
+    assert_eq!(hosts[0].agent_version.as_deref(), Some("0.1.0"));
+}
+
 #[tokio::test]
 async fn lists_hosts_with_their_os_version_and_newest_heartbeat() {
     let server = MockServer::start().await;

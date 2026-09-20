@@ -48,6 +48,27 @@ impl MetricNaming {
         }
     }
 
+    /// The dotted spelling of an attribute key a response came back under.
+    ///
+    /// SigNoz answers keyed the way it stores things, so a pre-v0.88 instance returns `host_name`
+    /// for the `host_name` a query asked for — while everything below this adapter looks an
+    /// attribute up by its semantic-convention name. Without this the mount point, the interface
+    /// and the sensor reach the client under keys nothing reads, and every series loses its label
+    /// with no error anywhere.
+    ///
+    /// The mapping is a lookup over `queried_attributes`, not a substitution:
+    /// `network_io_direction` is as good a reading of `network.io_direction` as of
+    /// `network.io.direction`, so a key Pessimal never asked for is left exactly as it arrived.
+    #[must_use]
+    pub fn to_dotted(self, returned: &str) -> String {
+        match self {
+            Self::Dotted => returned.to_owned(),
+            Self::Underscored => queried_attributes()
+                .find(|dotted| self.apply(dotted) == returned)
+                .map_or_else(|| returned.to_owned(), str::to_owned),
+        }
+    }
+
     /// The attribute keys a query must group by to preserve the distinctions the agent exported.
     ///
     /// Grouping only by host would silently collapse every mount point into one filesystem series
@@ -73,8 +94,29 @@ pub fn extra_dimensions(kind: MetricKind) -> &'static [&'static str] {
         }
         MetricKind::NetworkIo => &["network.io.direction", "network.interface.name"],
         MetricKind::MemoryUsage => &["system.memory.state"],
+        // Both, because the agent attaches both: `hw.id` is the identity the conventions require
+        // and `hw.name` the display name they recommend.
+        MetricKind::Temperature => &["hw.id", "hw.name"],
         _ => &[],
     }
+}
+
+/// Every dotted attribute key a query names: the resource attributes `list_hosts` groups by, and
+/// every dimension a metric is split on. [`MetricNaming::to_dotted`] inverts a response against
+/// this set, so a dimension added to `extra_dimensions` is invertible without a second list to
+/// keep in step.
+fn queried_attributes() -> impl Iterator<Item = &'static str> {
+    [
+        HOST_NAME_ATTRIBUTE,
+        OS_TYPE_ATTRIBUTE,
+        SERVICE_VERSION_ATTRIBUTE,
+    ]
+    .into_iter()
+    .chain(
+        MetricKind::ALL
+            .into_iter()
+            .flat_map(|kind| extra_dimensions(kind).iter().copied()),
+    )
 }
 
 /// How to aggregate a metric over time and across series.
@@ -181,6 +223,55 @@ mod tests {
         let keys = MetricNaming::Underscored.group_by(MetricKind::FilesystemUsage);
         assert!(keys.contains(&"system_filesystem_mountpoint".to_owned()));
         assert!(!keys.iter().any(|k| k.contains('.')));
+    }
+
+    #[test]
+    fn temperature_keeps_the_sensor_the_agent_exported() {
+        let keys = MetricNaming::Dotted.group_by(MetricKind::Temperature);
+        assert!(
+            keys.contains(&"hw.id".to_owned()),
+            "collapsing sensors would average the CPU die and the battery into one number"
+        );
+        assert!(keys.contains(&"hw.name".to_owned()));
+    }
+
+    #[test]
+    fn an_underscored_key_comes_back_under_the_name_the_rest_of_pessimal_uses() {
+        let underscored = MetricNaming::Underscored;
+        assert_eq!(underscored.to_dotted("host_name"), "host.name");
+        assert_eq!(
+            underscored.to_dotted("system_filesystem_mountpoint"),
+            "system.filesystem.mountpoint"
+        );
+        assert_eq!(underscored.to_dotted("hw_name"), "hw.name");
+    }
+
+    #[test]
+    fn a_key_pessimal_never_asked_for_is_left_exactly_as_it_arrived() {
+        // Underscores are not invertible in general: `foo_bar` may be a name with an underscore
+        // in it. Only the keys a query grouped by are re-spelled.
+        assert_eq!(
+            MetricNaming::Underscored.to_dotted("deployment_environment"),
+            "deployment_environment"
+        );
+        assert_eq!(MetricNaming::Dotted.to_dotted("host_name"), "host_name");
+    }
+
+    #[test]
+    fn no_two_queried_attributes_share_an_underscored_spelling() {
+        // The inverse above is a lookup over this set, so two attributes sharing a spelling would
+        // re-spell one of them as the other rather than leave it alone. The set repeats keys —
+        // both filesystem metrics carry the mount point — so distinct keys are what is counted.
+        let mut dotted: Vec<&str> = queried_attributes().collect();
+        dotted.sort_unstable();
+        dotted.dedup();
+        let mut spellings: Vec<String> = dotted
+            .iter()
+            .map(|key| MetricNaming::Underscored.attribute(key))
+            .collect();
+        spellings.sort_unstable();
+        spellings.dedup();
+        assert_eq!(spellings.len(), dotted.len(), "{dotted:?} -> {spellings:?}");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The SigNoz adapter.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration as StdDuration;
 
@@ -334,11 +335,25 @@ impl SignozQuery {
         }
     }
 
+    /// One returned series' labels, keyed the way the rest of Pessimal names attributes.
+    ///
+    /// SigNoz returns the key it stores, not the key the query asked for, so on a pre-v0.88
+    /// instance this is where `system_filesystem_mountpoint` becomes `system.filesystem.mountpoint`
+    /// again. Everything downstream — `series_label`, the "used of total" pairing, the alert's
+    /// series name — looks attributes up by their dotted names and by nothing else.
+    fn dotted_labels(&self, series: &TimeSeries) -> BTreeMap<String, String> {
+        let naming = self.config.naming();
+        series
+            .label_map()
+            .into_iter()
+            .map(|(key, value)| (naming.to_dotted(&key), value))
+            .collect()
+    }
+
     /// Turns one returned series into a [`MetricSeries`], or `None` if it carries no host.
     fn to_metric_series(&self, metric: MetricKind, series: &TimeSeries) -> Option<MetricSeries> {
-        let mut labels = series.label_map();
-        let host_key = self.config.naming().attribute(HOST_NAME_ATTRIBUTE);
-        let host = labels.remove(&host_key)?;
+        let mut labels = self.dotted_labels(series);
+        let host = labels.remove(HOST_NAME_ATTRIBUTE)?;
 
         let points: Vec<MetricPoint> = series
             .values()
@@ -401,9 +416,6 @@ impl TelemetryQuery for SignozQuery {
         );
 
         let response = self.post(&request).await?;
-        let host_key = naming.attribute(HOST_NAME_ATTRIBUTE);
-        let os_key = naming.attribute(OS_TYPE_ATTRIBUTE);
-        let version_key = naming.attribute(SERVICE_VERSION_ATTRIBUTE);
 
         let mut hosts: Vec<Host> = Vec::new();
         for series in response
@@ -414,16 +426,16 @@ impl TelemetryQuery for SignozQuery {
             .flat_map(TimeSeriesData::aggregations)
             .flat_map(AggregationBucket::series)
         {
-            let labels = series.label_map();
-            let Some(name) = labels.get(&host_key) else {
+            let labels = self.dotted_labels(series);
+            let Some(name) = labels.get(HOST_NAME_ATTRIBUTE) else {
                 continue;
             };
 
             let os = labels
-                .get(&os_key)
+                .get(OS_TYPE_ATTRIBUTE)
                 .map_or(OsFamily::Other, |value| OsFamily::from_otel_value(value));
             let mut host = Host::new(HostId::new(name.clone()), os);
-            if let Some(version) = labels.get(&version_key) {
+            if let Some(version) = labels.get(SERVICE_VERSION_ATTRIBUTE) {
                 host = host.with_agent_version(version.clone());
             }
             // A partial bucket would report a heartbeat later than the one actually recorded, which
