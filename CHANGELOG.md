@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.7.0 - 2026-09-20
+#### Features
+- (**agent**) let init turn temperatures on, from the sensors a host has - (f0c2d57) - El-Fitz, *Claude Opus 5*
+
+- - -
+
 ## v0.6.0 - 2026-09-20
 #### Features
 - (**agent,apps**) collect and show host temperatures - (ae0f087) - El-Fitz, *Claude Opus 5*
