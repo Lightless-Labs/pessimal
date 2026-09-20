@@ -439,6 +439,10 @@ impl TryFrom<AlertEvidenceRecord> for AlertEvidence {
 /// banner would have nothing to date itself by.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum FreshnessRecord {
+    /// Nothing has been asked of the backend yet. Not a fault, and not `Unusable`: the screen is
+    /// empty because the first poll has not run, not because one ran and left nothing worth
+    /// believing.
+    Unattempted,
     Fresh {
         at_millis: i64,
     },
@@ -464,6 +468,7 @@ pub enum FreshnessRecord {
 impl From<Freshness> for FreshnessRecord {
     fn from(freshness: Freshness) -> Self {
         match freshness {
+            Freshness::Unattempted => Self::Unattempted,
             Freshness::Fresh { at } => Self::Fresh {
                 at_millis: datetime_to_millis(at),
             },
@@ -500,6 +505,7 @@ impl TryFrom<FreshnessRecord> for Freshness {
     /// [`millis_to_datetime`].
     fn try_from(record: FreshnessRecord) -> Result<Self, Self::Error> {
         Ok(match record {
+            FreshnessRecord::Unattempted => Self::Unattempted,
             FreshnessRecord::Fresh { at_millis } => Self::Fresh {
                 at: millis_to_datetime(at_millis)?,
             },

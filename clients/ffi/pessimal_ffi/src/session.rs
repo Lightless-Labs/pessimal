@@ -998,10 +998,12 @@ mod tests {
         let freshness = session
             .freshness(NOW_MILLIS)
             .expect("a representable instant");
-        assert!(
-            matches!(freshness, FreshnessRecord::Unusable { .. }),
-            "a session that has never seen a roster cannot claim its picture is worth believing, \
-             got {freshness:?}"
+        assert_eq!(
+            freshness,
+            FreshnessRecord::Unattempted,
+            "a launch has not failed, it has not started: the apps render no banner for this, and \
+             rendered a red one claiming the data could not be believed while `Unusable` covered \
+             both cases"
         );
     }
 

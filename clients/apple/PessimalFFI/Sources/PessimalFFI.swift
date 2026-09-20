@@ -4699,6 +4699,12 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 
 public enum FreshnessRecord: Equatable, Hashable {
     
+    /**
+     * Nothing has been asked of the backend yet. Not a fault, and not `Unusable`: the screen is
+     * empty because the first poll has not run, not because one ran and left nothing worth
+     * believing.
+     */
+    case unattempted
     case fresh(atMillis: Int64
     )
     /**
@@ -4738,16 +4744,18 @@ public struct FfiConverterTypeFreshnessRecord: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .fresh(atMillis: try FfiConverterInt64.read(from: &buf)
+        case 1: return .unattempted
+        
+        case 2: return .fresh(atMillis: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 2: return .idle(lastSuccessMillis: try FfiConverterInt64.read(from: &buf)
+        case 3: return .idle(lastSuccessMillis: try FfiConverterInt64.read(from: &buf)
         )
         
-        case 3: return .degraded(lastSuccessMillis: try FfiConverterInt64.read(from: &buf), consecutiveFailures: try FfiConverterUInt32.read(from: &buf), failure: try FfiConverterOptionTypePollFailureRecord.read(from: &buf)
+        case 4: return .degraded(lastSuccessMillis: try FfiConverterInt64.read(from: &buf), consecutiveFailures: try FfiConverterUInt32.read(from: &buf), failure: try FfiConverterOptionTypePollFailureRecord.read(from: &buf)
         )
         
-        case 4: return .unusable(lastSuccessMillis: try FfiConverterOptionInt64.read(from: &buf), consecutiveFailures: try FfiConverterUInt32.read(from: &buf), failure: try FfiConverterOptionTypePollFailureRecord.read(from: &buf)
+        case 5: return .unusable(lastSuccessMillis: try FfiConverterOptionInt64.read(from: &buf), consecutiveFailures: try FfiConverterUInt32.read(from: &buf), failure: try FfiConverterOptionTypePollFailureRecord.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -4758,25 +4766,29 @@ public struct FfiConverterTypeFreshnessRecord: FfiConverterRustBuffer {
         switch value {
         
         
-        case let .fresh(atMillis):
+        case .unattempted:
             writeInt(&buf, Int32(1))
+        
+        
+        case let .fresh(atMillis):
+            writeInt(&buf, Int32(2))
             FfiConverterInt64.write(atMillis, into: &buf)
             
         
         case let .idle(lastSuccessMillis):
-            writeInt(&buf, Int32(2))
+            writeInt(&buf, Int32(3))
             FfiConverterInt64.write(lastSuccessMillis, into: &buf)
             
         
         case let .degraded(lastSuccessMillis,consecutiveFailures,failure):
-            writeInt(&buf, Int32(3))
+            writeInt(&buf, Int32(4))
             FfiConverterInt64.write(lastSuccessMillis, into: &buf)
             FfiConverterUInt32.write(consecutiveFailures, into: &buf)
             FfiConverterOptionTypePollFailureRecord.write(failure, into: &buf)
             
         
         case let .unusable(lastSuccessMillis,consecutiveFailures,failure):
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(5))
             FfiConverterOptionInt64.write(lastSuccessMillis, into: &buf)
             FfiConverterUInt32.write(consecutiveFailures, into: &buf)
             FfiConverterOptionTypePollFailureRecord.write(failure, into: &buf)

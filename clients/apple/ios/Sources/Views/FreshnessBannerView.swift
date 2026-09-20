@@ -17,14 +17,17 @@ import SwiftUI
 
 /// The banner shown whenever the fleet on screen is not current.
 ///
-/// Renders nothing for `.fresh`: a banner that is always there is a banner nobody reads.
+/// Renders nothing for `.fresh`: a banner that is always there is a banner nobody reads. Nothing
+/// for `.unattempted` either, and for the opposite reason — before the first poll there is no
+/// verdict to report, and the banner that used to appear there said the data could not be believed,
+/// which was a fault nobody had had yet.
 struct FreshnessBannerView: View {
     let freshness: FreshnessRecord
     let now: Date
 
     var body: some View {
         switch freshness {
-        case .fresh:
+        case .fresh, .unattempted:
             EmptyView()
 
         case let .idle(lastSuccessMillis):

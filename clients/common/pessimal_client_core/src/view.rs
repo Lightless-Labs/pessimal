@@ -178,6 +178,10 @@ pub struct FreshnessInputs {
 /// A clean poll always listed its roster, so the fallback only ever widens the answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Freshness {
+    /// Nothing has been asked of the backend yet: no roster, no clean poll, no failure. The
+    /// screen is empty because the first poll has not run, not because one ran and left nothing
+    /// worth believing — that is `Unusable`.
+    Unattempted,
     Fresh {
         at: DateTime<Utc>,
     },
@@ -208,6 +212,7 @@ impl Freshness {
     #[must_use]
     pub fn last_success(&self) -> Option<DateTime<Utc>> {
         match self {
+            Self::Unattempted => None,
             Self::Fresh { at } => Some(*at),
             Self::Idle { last_success } | Self::Degraded { last_success, .. } => {
                 Some(*last_success)
@@ -220,7 +225,10 @@ impl Freshness {
     pub fn severity(&self) -> Severity {
         match self {
             Self::Fresh { .. } => Severity::Ok,
-            Self::Idle { .. } => Severity::Unknown,
+            // `Unattempted` is not `Ok`: the order on `Severity` puts `Unknown` above `Ok` so that
+            // something nobody could judge is not coloured healthy, and nothing has been judged
+            // yet. Same rung as `Idle`, the other verdict that is not a fault.
+            Self::Unattempted | Self::Idle { .. } => Severity::Unknown,
             Self::Degraded { .. } => Severity::Warning,
             Self::Unusable { .. } => Severity::Critical,
         }
@@ -238,15 +246,31 @@ impl Freshness {
 /// on the view.
 ///
 /// In order:
-/// 1. no `last_roster_at` — we have never seen a roster — `Unusable`;
-/// 2. `!polled_this_session` — a restored cache — `Idle`, checked before the budget so a
+/// 1. no roster, no clean poll, no failures and no recorded failure — nothing has been asked of
+///    the backend — `Unattempted`;
+/// 2. no `last_roster_at` — we have asked and have never seen a roster — `Unusable`;
+/// 3. `!polled_this_session` — a restored cache — `Idle`, checked before the budget so a
 ///    six-hour-old cache reads "as of 6 hours ago" rather than a failure nobody has had yet;
-/// 3. `now - last_roster_at > budget` — `Unusable`; past the age at which we would call a *host*
+/// 4. `now - last_roster_at > budget` — `Unusable`; past the age at which we would call a *host*
 ///    down, the whole view is past the age at which it deserves to be believed;
-/// 4. `consecutive_failures == 0 && now - last_clean_at <= tolerance` — `Fresh`;
-/// 5. otherwise `Degraded`.
+/// 5. `consecutive_failures == 0 && now - last_clean_at <= tolerance` — `Fresh`;
+/// 6. otherwise `Degraded`.
 #[must_use]
 pub fn freshness_at(inputs: &FreshnessInputs, now: DateTime<Utc>) -> Freshness {
+    // Strictly narrower than the rule below it, and it has to come first: with nothing tried, the
+    // banner would otherwise report a fault nobody has had. `execute_plan` resolves the roster to
+    // `Listed` or `Failed` on every poll, so all four at rest means either no poll was folded or
+    // the folded one attempted nothing — the same statement. `polled_this_session` is deliberately
+    // not part of it: it comes back `false` for a restored state whose failure history is real,
+    // and that is a failure, not a launch.
+    if inputs.last_roster_at.is_none()
+        && inputs.last_clean_at.is_none()
+        && inputs.consecutive_failures == 0
+        && inputs.last_failure.is_none()
+    {
+        return Freshness::Unattempted;
+    }
+
     let Some(last_roster_at) = inputs.last_roster_at else {
         return Freshness::Unusable {
             last_success: inputs.last_clean_at,
@@ -625,6 +649,20 @@ mod tests {
         }
     }
 
+    /// `FleetState::new` at rest: nothing persisted, nothing folded, nothing attempted.
+    fn never_polled() -> FreshnessInputs {
+        FreshnessInputs {
+            as_of: None,
+            last_clean_at: None,
+            last_roster_at: None,
+            consecutive_failures: 0,
+            last_failure: None,
+            polled_this_session: false,
+            tolerance: Duration::seconds(90),
+            budget: Duration::seconds(150),
+        }
+    }
+
     fn unauthorized() -> PollFailure {
         PollFailure::from_core(&CoreError::Unauthorized, FailureSource::Roster, at(0))
     }
@@ -765,6 +803,68 @@ mod tests {
         assert_eq!(
             freshness_at(&after_fold, at(0)),
             Freshness::Fresh { at: at(0) }
+        );
+    }
+
+    #[test]
+    fn a_launch_before_the_first_poll_is_unattempted_not_unusable() {
+        // Nothing has failed, nothing is stale, nothing has been tried. Reporting `Unusable` here
+        // puts a fault on screen that nobody has had yet.
+        let freshness = freshness_at(&never_polled(), at(0));
+
+        assert_eq!(freshness, Freshness::Unattempted);
+        assert_eq!(
+            freshness.severity(),
+            Severity::Unknown,
+            "a question nobody has asked has no critical answer"
+        );
+        assert_eq!(freshness.last_success(), None);
+        assert!(!freshness.is_fresh());
+    }
+
+    #[test]
+    fn a_first_poll_that_fails_reads_unusable_not_unattempted() {
+        // The roster 401s on the first poll of a fresh install: no roster ever, and still a fault
+        // the owner has to see. `execute_plan` resolves the roster to `Listed` or `Failed` on
+        // every poll, so a failed first poll always leaves the count and the failure behind, and
+        // that is what separates it from a launch.
+        let inputs = FreshnessInputs {
+            as_of: Some(at(0)),
+            consecutive_failures: 1,
+            last_failure: Some(unauthorized()),
+            polled_this_session: true,
+            ..never_polled()
+        };
+
+        assert_eq!(
+            freshness_at(&inputs, at(0)),
+            Freshness::Unusable {
+                last_success: None,
+                consecutive_failures: 1,
+                failure: Some(unauthorized()),
+            },
+            "the failure must reach the banner so it can offer Open Settings"
+        );
+    }
+
+    #[test]
+    fn a_relaunch_after_a_session_that_only_failed_stays_unusable() {
+        // `consecutive_failures` and `last_failure` are persisted — only `polled_this_session` is
+        // `#[serde(skip)]` — so a restored failure history is not "nothing attempted". With no
+        // roster ever there is no cached picture to call `Idle` either.
+        let inputs = FreshnessInputs {
+            consecutive_failures: 3,
+            last_failure: Some(unauthorized()),
+            ..never_polled()
+        };
+
+        assert_eq!(
+            freshness_at(&inputs, at(0)),
+            Freshness::Unusable {
+                last_success: None,
+                consecutive_failures: 3,
+                failure: Some(unauthorized()),
+            }
         );
     }
 

@@ -103,7 +103,7 @@ struct FleetMenuView: View {
             Divider()
 
             if fleet.hosts.isEmpty {
-                emptyFleet
+                emptyFleet(now: now)
             } else {
                 hostList(fleet: fleet, now: now)
             }
@@ -193,17 +193,26 @@ struct FleetMenuView: View {
         return min(hostListHeight, Self.listMaxHeight)
     }
 
-    private var emptyFleet: some View {
+    /// An empty fleet, which before the first poll is not the same statement as after it.
+    ///
+    /// `adopt` gives the app core's view immediately, so a launch has a real, empty fleet on screen
+    /// before anything has been asked of the backend. Saying "the backend answered and listed
+    /// nothing" there names an answer nobody has received.
+    @ViewBuilder
+    private func emptyFleet(now: Date) -> some View {
+        let attempted = model.freshness(at: now) != .unattempted
         VStack(alignment: .leading, spacing: 4) {
-            Text("No hosts are reporting.")
+            Text(attempted ? "No hosts are reporting." : "Waiting for the first poll…")
                 .font(.callout)
-            Text(
-                "The backend answered and listed nothing. Check that an agent is running and "
-                    + "exporting under this environment."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            if attempted {
+                Text(
+                    "The backend answered and listed nothing. Check that an agent is running and "
+                        + "exporting under this environment."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)

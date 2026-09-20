@@ -118,7 +118,7 @@ struct FleetListView: View {
 
             Section {
                 if fleet.hosts.isEmpty {
-                    emptyFleet
+                    emptyFleet(now: now)
                 } else {
                     // Core's order: degraded hosts first. Not re-sorted, not filtered, not grouped — a
                     // second sort here would be a second place that order is decided, and the two would
@@ -191,16 +191,25 @@ struct FleetListView: View {
         .accessibilityLabel("Fleet severity: \(FleetStyle.name(for: fleet.severity))")
     }
 
-    private var emptyFleet: some View {
+    /// An empty fleet, which before the first poll is not the same statement as after it.
+    ///
+    /// `adopt` gives the app core's view immediately, so a launch has a real, empty fleet on screen
+    /// before anything has been asked of the backend. Saying "the backend answered and listed
+    /// nothing" there names an answer nobody has received.
+    @ViewBuilder
+    private func emptyFleet(now: Date) -> some View {
+        let attempted = model.freshness(at: now) != .unattempted
         VStack(alignment: .leading, spacing: 4) {
-            Text("No hosts are reporting.")
-            Text(
-                "The backend answered and listed nothing. Check that an agent is running and "
-                    + "exporting under this environment."
-            )
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+            Text(attempted ? "No hosts are reporting." : "Waiting for the first poll…")
+            if attempted {
+                Text(
+                    "The backend answered and listed nothing. Check that an agent is running and "
+                        + "exporting under this environment."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
