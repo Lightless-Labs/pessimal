@@ -545,6 +545,14 @@ pub fn render_toml(config: &AgentConfig) -> String {
     out.push_str("# Written by `pessimal-agent init`. Edit it by hand, or run init again.\n");
     out.push_str("# Every value can be overridden by a PESSIMAL_* environment variable.\n\n");
 
+    render_export(&mut out, config);
+    render_resource(&mut out, config);
+    render_collection(&mut out, config);
+    out
+}
+
+/// The `[export]` table: where metrics go and how often.
+fn render_export(out: &mut String, config: &AgentConfig) {
     out.push_str("[export]\n");
     out.push_str("# The backend's shape: otlp, signoz, clickstack or honeycomb.\n");
     let _ = writeln!(
@@ -582,7 +590,10 @@ pub fn render_toml(config: &AgentConfig) -> String {
             let _ = writeln!(out, "{} = {}", toml_key(name), toml_string(value));
         }
     }
+}
 
+/// The `[resource]` table: what this host calls itself.
+fn render_resource(out: &mut String, config: &AgentConfig) {
     out.push_str("\n[resource]\n");
     let _ = writeln!(
         out,
@@ -608,7 +619,14 @@ pub fn render_toml(config: &AgentConfig) -> String {
             let _ = writeln!(out, "{} = {}", toml_key(name), toml_string(value));
         }
     }
+}
 
+/// The `[collection]` table: what is sampled.
+///
+/// Every key of `CollectionConfig` must appear here. `init` parses its own render back and
+/// refuses to write when the two differ, so a key missing from this function does not lose a
+/// setting quietly — it stops `init` running at all on a host that set it.
+fn render_collection(out: &mut String, config: &AgentConfig) {
     out.push_str("\n[collection]\n");
     out.push_str(
         "# Mount points to report. Empty means every mount, which on a laptop is a great many.\n",
@@ -630,7 +648,23 @@ pub fn render_toml(config: &AgentConfig) -> String {
         "per_interface_network = {}",
         config.collection.per_interface_network
     );
-    out
+    out.push_str(
+        "# Report hardware temperatures. Off by default: how many sensors a host has is unbounded\n",
+    );
+    out.push_str("# until it is measured, and every sensor is a series of its own.\n");
+    let _ = writeln!(out, "temperatures = {}", config.collection.temperatures);
+    out.push_str("# Sensor labels to report. Empty means every one the host offers.\n");
+    let _ = writeln!(
+        out,
+        "temperature_sensors = [{}]",
+        config
+            .collection
+            .temperature_sensors
+            .iter()
+            .map(|sensor| toml_string(sensor))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 /// A TOML basic string. Escapes what the spec requires, so a key with a quote or a backslash in it
@@ -709,6 +743,8 @@ mod tests {
             [collection]
             filesystems = ["/", "/data"]
             per_interface_network = true
+            temperatures = true
+            temperature_sensors = ["PMU tdev1", "gas gauge battery"]
         "#,
         )
         .expect("valid");
@@ -733,6 +769,39 @@ mod tests {
             vec!["/".to_owned(), "/data".to_owned()]
         );
         assert!(config.collection.per_interface_network);
+        assert!(config.collection.temperatures);
+        assert_eq!(
+            config.collection.temperature_sensors,
+            vec!["PMU tdev1".to_owned(), "gas gauge battery".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_rendered_config_carries_every_collection_key() {
+        // A key the renderer forgets is a key `init` destroys: `write_config` parses its own render
+        // back and refuses to write when the two differ, so an un-rendered key makes `init` fail
+        // outright on a host that set it. Adding `temperatures` to `CollectionConfig` without
+        // adding it here did exactly that, and no test caught it because every fixture left the new
+        // keys at their defaults, where "missing" and "default" parse the same.
+        let config = AgentConfig::from_toml(
+            r#"
+            [export]
+            endpoint = "http://localhost:4317"
+            [collection]
+            filesystems = []
+            per_interface_network = true
+            temperatures = true
+            temperature_sensors = ["PMU tdev1"]
+        "#,
+        )
+        .expect("valid");
+
+        let rendered = render_toml(&config);
+        assert_eq!(
+            AgentConfig::from_toml(&rendered).expect("the render parses"),
+            config,
+            "every field of a non-default config must survive the round trip:\n{rendered}"
+        );
     }
 
     #[test]

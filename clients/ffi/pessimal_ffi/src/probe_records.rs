@@ -93,8 +93,8 @@ impl From<ProbeFailureKind> for PollFailureKind {
 /// one.
 ///
 /// The metric travels as its OTel instrument name rather than as a mirrored
-/// [`MetricKind`]: twelve duplicated variants in a module whose real code path never emits any of
-/// them would be twelve places to forget when the domain grows a metric, and `MetricKind` belongs
+/// [`MetricKind`]: thirteen duplicated variants in a module whose real code path never emits any of
+/// them would be thirteen places to forget when the domain grows a metric, and `MetricKind` belongs
 /// to the modules that actually expose metrics. The name is the domain's own
 /// [`MetricKind::otel_name`], and the way back is the domain's own [`MetricKind::from_otel_name`],
 /// so there is no second copy of that table here.

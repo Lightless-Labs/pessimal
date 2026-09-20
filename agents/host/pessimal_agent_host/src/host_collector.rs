@@ -1,9 +1,9 @@
 //! Sampling the host with `sysinfo`.
 //!
 //! Every value is turned into the shape [`pessimal_core::MetricKind`] declares: ratios in
-//! `0.0..=1.0` (not percentages), bytes (not kibibytes), seconds. The backend sees semantic
-//! convention names with semantic convention units, so a dashboard written against any other
-//! OpenTelemetry host collector keeps working.
+//! `0.0..=1.0` (not percentages), bytes (not kibibytes), seconds, degrees Celsius. The backend
+//! sees semantic convention names with semantic convention units, so a dashboard written against
+//! any other OpenTelemetry host collector keeps working.
 
 use std::collections::HashSet;
 
@@ -13,7 +13,7 @@ use pessimal_agent_core::collector::{MetricCollector, Observation};
 use pessimal_agent_core::config::CollectionConfig;
 use pessimal_agent_core::error::Result;
 use pessimal_core::MetricKind;
-use sysinfo::{Disks, MemoryRefreshKind, Networks, RefreshKind, System};
+use sysinfo::{Components, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
 
 /// Semconv `state` value for the portion of a resource in use. Both `system.memory.usage` and
 /// `system.filesystem.usage` are defined per state, so a bare total is not the same metric a
@@ -30,8 +30,11 @@ pub struct HostCollector {
     system: System,
     disks: Disks,
     networks: Networks,
+    components: Components,
     filesystems: HashSet<String>,
     per_interface_network: bool,
+    temperatures: bool,
+    temperature_sensors: Vec<String>,
 }
 
 impl HostCollector {
@@ -54,8 +57,15 @@ impl HostCollector {
             system,
             disks: Disks::new_with_refreshed_list(),
             networks: Networks::new_with_refreshed_list(),
+            // Empty rather than refreshed, so a host that does not ask for temperatures never
+            // enumerates its sensors. `Components::new_with_refreshed_list` is `new()` followed by
+            // `refresh(true)` in sysinfo 0.39.6, and both sampling paths here refresh before
+            // reading, so nothing is lost by listing late.
+            components: Components::new(),
             filesystems: config.filesystems.iter().cloned().collect(),
             per_interface_network: config.per_interface_network,
+            temperatures: config.temperatures,
+            temperature_sensors: config.temperature_sensors.clone(),
         }
     }
 
@@ -186,6 +196,108 @@ impl HostCollector {
             round_to_f64(System::uptime()),
         )]
     }
+
+    /// One reading per reporting sensor, or nothing at all when the configuration has not asked
+    /// for temperatures.
+    ///
+    /// `hw.id` and `hw.name` both carry the sensor label as the host spells it. There is no
+    /// portable identifier behind it to prefer: on macOS arm `sysinfo` exposes the HID driver's
+    /// serial, on Linux a label it synthesises from `hwmon` files.
+    fn temperatures(&mut self) -> Vec<Observation> {
+        if !self.temperatures {
+            return Vec::new();
+        }
+        self.components.refresh(true);
+        let kept: HashSet<String> = self
+            .sensor_selection_of_current_list()
+            .kept
+            .into_iter()
+            .collect();
+
+        self.components
+            .list()
+            .iter()
+            .filter(|component| kept.contains(component.label()))
+            .filter_map(|component| observation_for(component.label(), component.temperature()))
+            .collect()
+    }
+
+    /// Which sensors this host offers and which of them the configuration reports.
+    ///
+    /// Refreshes the sensor list, so it costs what a temperature sample costs. `--sample` uses it
+    /// to say whether a host reported no temperatures because it has no sensors or because none
+    /// of them matched `temperature_sensors`.
+    pub fn sensor_selection(&mut self) -> SensorSelection {
+        self.components.refresh(true);
+        self.sensor_selection_of_current_list()
+    }
+
+    fn sensor_selection_of_current_list(&self) -> SensorSelection {
+        let labels: Vec<String> = self
+            .components
+            .list()
+            .iter()
+            .map(|component| component.label().to_owned())
+            .collect();
+        select_sensors(&labels, &self.temperature_sensors)
+    }
+}
+
+/// What a host's sensors are and which of them a configured list selects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SensorSelection {
+    /// Every sensor label the host offered, as the host spells it.
+    pub seen: Vec<String>,
+    /// The ones to report.
+    pub kept: Vec<String>,
+}
+
+/// Applies `[collection] temperature_sensors` to the labels a host offers. An empty configured
+/// list means every sensor.
+///
+/// A function over labels rather than over hardware, so the rule is testable on a machine with no
+/// sensors — this project's own VM reports none, and a test that went through `sysinfo` there would
+/// assert nothing at all.
+fn select_sensors(labels: &[String], configured: &[String]) -> SensorSelection {
+    let kept = if configured.is_empty() {
+        labels.to_vec()
+    } else {
+        labels
+            .iter()
+            .filter(|label| configured.contains(*label))
+            .cloned()
+            .collect()
+    };
+    SensorSelection {
+        seen: labels.to_vec(),
+        kept,
+    }
+}
+
+/// One sensor's reading, as an observation, or nothing when the sensor did not report one.
+///
+/// Pure, and separate from [`HostCollector::temperatures`], because the loop it came from runs only
+/// on a host that has sensors — and the machine this suite runs on has none, so every assertion
+/// about the reading, its attributes and the values that are dropped would pass over an empty
+/// iterator. Here it is tested directly.
+///
+/// A listed sensor that will not say how hot it is reports `None`, or `f32::NAN` on Linux where the
+/// read failed; sysinfo 0.39.6 documents both on `Component`. The semantic conventions say nothing
+/// about a sensor that does not report, so dropping the point is Pessimal's choice: a gap reads as
+/// a gap, where a zero would read as a cold host.
+///
+/// `hw.id` and `hw.name` both carry the label as the host spells it. There is no portable
+/// identifier behind it to prefer: on macOS arm `sysinfo` exposes the HID driver's serial, on Linux
+/// a label it synthesises from `hwmon` files. Two components that report the same label therefore
+/// become one series, and the later reading wins in aggregation — accepted, because a slug would
+/// not tell them apart either.
+fn observation_for(label: &str, celsius: Option<f32>) -> Option<Observation> {
+    let celsius = celsius.filter(|value| value.is_finite())?;
+    Some(
+        Observation::new(MetricKind::Temperature, f64::from(celsius))
+            .with_attribute(attribute::HW_ID, label)
+            .with_attribute(attribute::HW_NAME, label),
+    )
 }
 
 /// Widens a byte or second count to `f64`.
@@ -206,6 +318,7 @@ impl MetricCollector for HostCollector {
         observations.extend(self.network());
         observations.extend(Self::load_average());
         observations.extend(Self::uptime());
+        observations.extend(self.temperatures());
         Ok(observations)
     }
 }
@@ -368,7 +481,7 @@ mod tests {
     fn an_unmatched_filesystem_filter_reports_no_filesystems() {
         let config = CollectionConfig {
             filesystems: vec!["/no/such/mount".to_owned()],
-            per_interface_network: false,
+            ..CollectionConfig::default()
         };
         let observations = sample(&config);
         assert!(values_of(&observations, MetricKind::FilesystemUsage).is_empty());
@@ -387,6 +500,79 @@ mod tests {
             !cfg!(windows),
             "load average should be present exactly where the platform provides it"
         );
+    }
+
+    fn labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_empty_sensor_list_keeps_every_sensor() {
+        let seen = labels(&["PMU tdev1", "SOC MTR Temp Sensor0"]);
+        let selection = select_sensors(&seen, &[]);
+        assert_eq!(selection.seen, seen);
+        assert_eq!(selection.kept, seen);
+    }
+
+    #[test]
+    fn a_named_sensor_list_keeps_only_the_sensors_it_names() {
+        let seen = labels(&["PMU tdev1", "SOC MTR Temp Sensor0", "gpu thermal"]);
+        let selection = select_sensors(&seen, &labels(&["gpu thermal", "PMU tdev1"]));
+        assert_eq!(selection.seen, seen);
+        assert_eq!(selection.kept, labels(&["PMU tdev1", "gpu thermal"]));
+    }
+
+    #[test]
+    fn a_sensor_list_that_names_nothing_present_keeps_nothing() {
+        let seen = labels(&["PMU tdev1"]);
+        let selection = select_sensors(&seen, &labels(&["no such sensor"]));
+        assert_eq!(selection.seen, seen);
+        assert!(selection.kept.is_empty());
+    }
+
+    #[test]
+    fn a_host_with_no_sensors_keeps_nothing_and_reports_nothing_seen() {
+        let selection = select_sensors(&[], &labels(&["PMU tdev1"]));
+        assert!(selection.seen.is_empty());
+        assert!(selection.kept.is_empty());
+    }
+
+    #[test]
+    fn temperatures_are_absent_unless_collection_asks_for_them() {
+        let observations = sample(&CollectionConfig::default());
+        assert!(values_of(&observations, MetricKind::Temperature).is_empty());
+    }
+
+    #[test]
+    fn a_sensor_reading_carries_its_label_twice() {
+        // The real per-sensor decision, tested where sensors exist: here. Driving it through
+        // `sample()` instead would assert nothing on this project's own VM, which reports none —
+        // the loop body never runs and every assertion passes over an empty iterator.
+        let observation = observation_for("PMU tdev1", Some(41.5)).expect("a reading is reported");
+
+        assert_eq!(observation.kind, MetricKind::Temperature);
+        assert!((observation.value - 41.5).abs() < f64::EPSILON);
+        assert_eq!(
+            observation.attributes.get("hw.id").map(String::as_str),
+            Some("PMU tdev1"),
+            "hw.id is Required by the convention and carries the label verbatim"
+        );
+        assert_eq!(
+            observation.attributes.get("hw.name").map(String::as_str),
+            Some("PMU tdev1"),
+            "hw.name carries it too: there is no portable identifier to prefer"
+        );
+    }
+
+    #[test]
+    fn a_sensor_that_will_not_say_is_dropped_rather_than_reported_cold() {
+        // `None` on every platform, and NAN on Linux where the read failed. A zero would render as
+        // a cold host, which is a claim the agent cannot make.
+        assert!(observation_for("PMU tdev1", None).is_none());
+        assert!(observation_for("PMU tdev1", Some(f32::NAN)).is_none());
+        assert!(observation_for("PMU tdev1", Some(f32::INFINITY)).is_none());
+        // A real reading below zero is not an error: an outdoor probe or a freezer is a host too.
+        assert!(observation_for("chiller", Some(-8.0)).is_some());
     }
 
     #[test]

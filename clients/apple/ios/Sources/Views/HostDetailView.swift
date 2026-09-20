@@ -66,6 +66,7 @@ struct HostDetailView: View {
                 statusSection(host: host, now: now)
                 warningsSection(host: host)
                 metricsSection(host: host, now: now)
+                temperatureSection(host: host, now: now)
                 alertsSection(host: host, now: now)
                 forgetSection
             }
@@ -275,19 +276,22 @@ struct HostDetailView: View {
             .capacity
     }
 
-    /// Every series this host reports, in core's order.
+    /// Every series this host reports except the sensor readings, in core's order.
     ///
-    /// Not filtered and not grouped. `metrics` arrives sorted by `(kind, id)` with one entry per
+    /// Filtered but never re-sorted. `metrics` arrives sorted by `(kind, id)` with one entry per
     /// attribute set, and a second sort here would be a second place that order is decided — which
-    /// is also how a `ForEach` comes to animate rows that did not change.
+    /// is also how a `ForEach` comes to animate rows that did not change. The one filter is
+    /// ``inventory(_:)``; the sensor readings it holds back have their own section below.
     @ViewBuilder
     private func metricsSection(host: HostViewRecord, now: Date) -> some View {
+        let inventory = Self.inventory(host.metrics)
+
         Section {
-            if host.metrics.isEmpty {
+            if inventory.isEmpty {
                 Text("No series were gathered for this host.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(host.metrics, id: \.id) { metric in
+                ForEach(inventory, id: \.id) { metric in
                     HostDetailMetricRow(
                         metric: metric,
                         capacity: capacity(for: metric, on: host),
@@ -298,14 +302,186 @@ struct HostDetailView: View {
         } header: {
             Text("Metrics")
         } footer: {
-            Text(
-                """
-                One row per series: a filesystem per mount point, network I/O per interface and \
-                direction. These are the series the last poll gathered, not a list of everything \
-                this host could report.
-                """
-            )
+            Text(Self.metricsFooter(inventory: inventory))
         }
+    }
+
+    /// What the metric inventory is, plus the one thing an unread temperature row does not mean.
+    ///
+    /// The extra sentence appears only when a temperature row is in the inventory, which is only
+    /// when the metric was fetched and came back with nothing. `FleetStyle.explanation` says "Not
+    /// reported by this host", which is true and says nothing about why. The agent's
+    /// `[collection] temperatures` is off unless a config asks for it, and it also takes a list of
+    /// sensor labels to report; this screen can see neither.
+    private static func metricsFooter(inventory: [MetricViewRecord]) -> String {
+        let what = """
+            One row per series: a filesystem per mount point, network I/O per interface and \
+            direction. These are the series the last poll gathered, not a list of everything this \
+            host could report.
+            """
+        guard inventory.contains(where: { $0.kind == .temperature }) else { return what }
+        return what + " " + """
+            A temperature row with no reading is not a claim that the machine has no sensors: the \
+            agent collects them only when its configuration asks it to.
+            """
+    }
+
+    // MARK: - Temperature
+
+    /// The series that belong in the metric inventory: everything except a sensor.
+    ///
+    /// Split on the **label**, not on whether there is a reading. Core's placeholder for a metric
+    /// that came back with no samples at all — the row carrying `NotReported` or `Unavailable` —
+    /// is built from an empty attribute map and so has no label (`fold.rs`, `metric_views`), while
+    /// a real sensor always has one, because the sensor's name is what labels it. A sensor whose
+    /// latest reading is missing is still a sensor, and splitting on `latest` filed it here as
+    /// though the host had no sensors at all.
+    private static func inventory(_ metrics: [MetricViewRecord]) -> [MetricViewRecord] {
+        metrics.filter { $0.kind != .temperature || $0.label == nil }
+    }
+
+    /// One entry per sensor the host reports, in core's order, reading or not.
+    private static func sensors(_ metrics: [MetricViewRecord]) -> [MetricViewRecord] {
+        metrics.filter { $0.kind == .temperature && $0.label != nil }
+    }
+
+    /// The hottest sensor, or `nil` when none of them read a finite number.
+    ///
+    /// A fold rather than `max(by:)` because `>` over a `NaN` is false in both directions, which
+    /// makes it not a strict weak ordering and `max(by:)` free to return anything.
+    private static func hottest(_ sensors: [MetricViewRecord]) -> MetricViewRecord? {
+        sensors.reduce(nil) { best, sensor in
+            guard let value = sensor.latest?.value, value.isFinite else { return best }
+            guard let incumbent = best?.latest?.value else { return sensor }
+            return value > incumbent ? sensor : best
+        }
+    }
+
+    /// Every sensor on this host, behind one row.
+    ///
+    /// **Collapsed, because the number of sensors is unbounded and unknown.** A Mac reports a
+    /// reading per component — the spec has no CPU or GPU temperature metric, a sensor is its own
+    /// component — so an expanded list of them would push the alerts and the forget button off the
+    /// screen on the machines where temperature is most worth having. Collapsed, the whole set
+    /// costs one row, and the header carries the reading somebody opening this screen came for:
+    /// the hottest one, named.
+    ///
+    /// Absent, not empty, when no sensor reported: a section headed "Temperature" with nothing
+    /// under it reads as a broken screen, and a host that reports no temperature is the ordinary
+    /// case — this project's own VM has no sensors at all.
+    @ViewBuilder
+    private func temperatureSection(host: HostViewRecord, now: Date) -> some View {
+        let sensors = Self.sensors(host.metrics)
+
+        if !sensors.isEmpty {
+            Section {
+                DisclosureGroup {
+                    ForEach(sensors, id: \.id) { sensor in
+                        sensorRow(sensor)
+                    }
+                } label: {
+                    temperatureSummary(sensors)
+                }
+
+                // Core stores one availability per host and metric kind and hands every series of
+                // that kind the same one, so any sensor speaks for all of them. Said once here
+                // rather than on every row, which is the point of collapsing them.
+                if let first = sensors.first,
+                    let explanation = FleetStyle.explanation(for: first.availability) {
+                    Label {
+                        Text("\(explanation). \(Self.fetchedDetail(first, now: now))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: FleetStyle.symbolName(for: first.availability))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+            } header: {
+                Text("Temperature")
+            } footer: {
+                Text(
+                    """
+                    One row per sensor the agent reports, under the name the agent reports for it. \
+                    Pessimal does not label a sensor as the CPU or the GPU: there is no portable \
+                    way to tell, so the raw name is what is shown.
+                    """
+                )
+            }
+        }
+    }
+
+    /// The collapsed row: how many sensors there are, and the hottest of them.
+    @ViewBuilder
+    private func temperatureSummary(_ sensors: [MetricViewRecord]) -> some View {
+        let hottest = Self.hottest(sensors)
+
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(FleetFormat.count(UInt32(sensors.count), singular: "sensor", plural: "sensors"))
+                    .font(.body)
+
+                if let hottest {
+                    Text("hottest: \(Self.sensorName(hottest))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if let hottest {
+                Text(FleetFormat.latestValue(of: hottest))
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(Self.valueStyle(hottest))
+            }
+        }
+        // One stop for VoiceOver rather than three, as the metric rows do it. Read apart, "45.6°C"
+        // follows two lines that do not say it is a temperature.
+        .accessibilityElement(children: .combine)
+    }
+
+    /// One sensor, expanded: its name and its reading.
+    ///
+    /// Deliberately not a ``HostDetailMetricRow``. That row is three or four lines tall — unit
+    /// noun, attribute set, availability sentence — and thirty of those is the screen this section
+    /// exists to avoid. Nothing is lost by the shorter form: a temperature carries no capacity, its
+    /// only attributes are the sensor's id and name, and the name is already the row's title.
+    @ViewBuilder
+    private func sensorRow(_ sensor: MetricViewRecord) -> some View {
+        LabeledContent {
+            Text(FleetFormat.latestValue(of: sensor))
+                .font(.body.monospacedDigit())
+                .foregroundStyle(Self.valueStyle(sensor))
+        } label: {
+            Text(Self.sensorName(sensor))
+                .font(.body)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// The sensor's name as core labelled the series.
+    ///
+    /// `hw.id` is Required in the semantic conventions and core falls back to it when `hw.name` is
+    /// absent, so a `nil` label means neither attribute arrived. The metric's own display name is
+    /// then all there is to say, and it is said rather than left blank.
+    private static func sensorName(_ sensor: MetricViewRecord) -> String {
+        sensor.label ?? sensor.displayName
+    }
+
+    /// Greyed unless the reading is current, the same rule the metric rows use: core is explicit
+    /// that a non-`present` value is real but frozen.
+    private static func valueStyle(_ sensor: MetricViewRecord) -> AnyShapeStyle {
+        sensor.availability == .present ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary)
+    }
+
+    /// When a non-current reading was last actually fetched. `nil` is its own fact.
+    private static func fetchedDetail(_ sensor: MetricViewRecord, now: Date) -> String {
+        guard let fetchedAt = sensor.fetchedAtMillis else { return "Never fetched." }
+        return "Fetched \(FleetFormat.age(sinceMillis: fetchedAt, at: now))."
     }
 
     // MARK: - Alerts

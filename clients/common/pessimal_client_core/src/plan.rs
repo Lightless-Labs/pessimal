@@ -170,7 +170,7 @@ mod tests {
     use pessimal_core::{AlertRule, Comparator};
 
     use super::*;
-    use crate::config::PollTuning;
+    use crate::config::{DEFAULT_DETAIL_METRICS, DEFAULT_OVERVIEW_METRICS, PollTuning};
 
     fn at(offset_secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_757_000_000 + offset_secs, 0).expect("a valid fixture instant")
@@ -188,6 +188,37 @@ mod tests {
     /// still running, the newest *queryable* heartbeat was 88 seconds behind wall clock. Part of
     /// that is bucket quantisation, most of it the backend's ingestion-to-queryable delay.
     const MEASURED_BACKEND_LAG_SECONDS: i64 = 88;
+
+    #[test]
+    fn temperature_is_asked_for_only_when_a_host_is_focused() {
+        // The cost decision, where it takes effect. A sensor per component means an unbounded
+        // number of series per host, so no poll may ask for temperature fleet-wide; the one host
+        // whose detail screen is open is bounded by definition.
+        let config = FleetConfig::new("prod", PollTuning::default())
+            .expect("a valid environment")
+            .with_overview_metrics(DEFAULT_OVERVIEW_METRICS.to_vec())
+            .with_detail_metrics(DEFAULT_DETAIL_METRICS.to_vec());
+
+        let fleet_wide = plan_poll(&config, at(0)).expect("a valid plan");
+        assert!(
+            !fleet_wide
+                .queries
+                .iter()
+                .any(|query| query.metric == MetricKind::Temperature),
+            "no temperature query without a focused host: {:?}",
+            fleet_wide.queries
+        );
+
+        let focused =
+            plan_poll(&config.clone().with_focus(Some(web1())), at(0)).expect("a valid plan");
+        let temperature: Vec<_> = focused
+            .queries
+            .iter()
+            .filter(|query| query.metric == MetricKind::Temperature)
+            .collect();
+        assert_eq!(temperature.len(), 1, "exactly one, for the focused host");
+        assert_eq!(temperature[0].selector, HostSelector::Host(web1()));
+    }
 
     /// A rule on a metric the default overview set does not chart, so `planned_metrics()` is
     /// observably wider than `overview_metrics` rather than accidentally equal to it.

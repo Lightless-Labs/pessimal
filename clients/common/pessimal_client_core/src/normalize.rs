@@ -37,6 +37,10 @@ const NETWORK_IO_DIRECTION: &str = "network.io.direction";
 pub(crate) const MEMORY_STATE: &str = "system.memory.state";
 /// `used` | `free` | `reserved`. Only the used slice is half of a "used of total".
 pub(crate) const FILESYSTEM_STATE: &str = "system.filesystem.state";
+/// The sensor a temperature reading came from. `pessimal_agent_host` attaches both; the semantic
+/// conventions mark only `hw.id` Required, so only the id is guaranteed to be there.
+const HW_ID: &str = "hw.id";
+const HW_NAME: &str = "hw.name";
 
 /// What a metric's raw samples have to become before anything reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,7 +255,7 @@ pub fn dominant_at(
 ///
 /// Only the dimensions the agent actually splits on (`naming.rs::extra_dimensions`) are
 /// recognised, in the order a reader would name them: the mount, then the interface and
-/// direction, then the memory state.
+/// direction, then the memory state, then the sensor.
 #[must_use]
 pub fn series_label(series: &MetricSeries) -> Option<String> {
     let attributes = &series.attributes;
@@ -266,7 +270,15 @@ pub fn series_label(series: &MetricSeries) -> Option<String> {
         (Some(only), None) | (None, Some(only)) => return Some(only.clone()),
         (None, None) => {}
     }
-    attributes.get(MEMORY_STATE).cloned()
+    if let Some(state) = attributes.get(MEMORY_STATE) {
+        return Some(state.clone());
+    }
+    // A sensor without a name falls back to its id, which is the attribute the conventions
+    // require: the alternative is a row of temperatures that all read as host-wide.
+    attributes
+        .get(HW_NAME)
+        .or_else(|| attributes.get(HW_ID))
+        .cloned()
 }
 
 /// A stable `ForEach` identity: `"{host}|{otel_name}|{k=v,…}"` over the sorted attribute map.
@@ -655,6 +667,25 @@ mod tests {
             series_label(&series(MetricKind::CpuUtilization, vec![])),
             None,
             "a host-wide series has nothing to disambiguate"
+        );
+    }
+
+    #[test]
+    fn a_temperature_series_is_labelled_by_its_sensor() {
+        let mut named = BTreeMap::new();
+        named.insert(HW_ID.to_owned(), "PMU tdev1".to_owned());
+        named.insert(HW_NAME.to_owned(), "PMU tdev1".to_owned());
+        let sensor = series(MetricKind::Temperature, vec![]).with_attributes(named);
+        assert_eq!(series_label(&sensor).as_deref(), Some("PMU tdev1"));
+
+        // `hw.name` is Recommended and `hw.id` Required in the semantic conventions, so a reading
+        // that carries only the id still has to name something.
+        let mut id_only = BTreeMap::new();
+        id_only.insert(HW_ID.to_owned(), "coretemp Package id 0".to_owned());
+        let unnamed = series(MetricKind::Temperature, vec![]).with_attributes(id_only);
+        assert_eq!(
+            series_label(&unnamed).as_deref(),
+            Some("coretemp Package id 0")
         );
     }
 

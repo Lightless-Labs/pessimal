@@ -250,7 +250,38 @@ fn print_sample(config: &AgentConfig) -> Result<()> {
             attributes
         );
     }
+    print_temperature_note(config, &mut collector);
     Ok(())
+}
+
+/// Says what became of the host's temperature sensors.
+///
+/// A host with no sensors, a host whose sensors none of the configured labels name, and a host
+/// that was never asked for temperatures all print the same nothing otherwise. Only the agent can
+/// tell those apart, so it says which one this is rather than leaving the reader to guess.
+fn print_temperature_note(config: &AgentConfig, collector: &mut HostCollector) {
+    if !config.collection.temperatures {
+        println!(
+            "hw.temperature: not collected; set [collection] temperatures = true to report it"
+        );
+        return;
+    }
+    let selection = collector.sensor_selection();
+    if selection.seen.is_empty() {
+        println!("hw.temperature: this host reports no sensors");
+    } else if selection.kept.is_empty() {
+        println!(
+            "hw.temperature: no sensor matches [collection] temperature_sensors; \
+             this host reports {}",
+            selection.seen.join(", ")
+        );
+    } else {
+        println!(
+            "hw.temperature: reporting {} of this host's {} sensors",
+            selection.kept.len(),
+            selection.seen.len()
+        );
+    }
 }
 
 /// The process environment as a plain map, so config override logic stays pure.

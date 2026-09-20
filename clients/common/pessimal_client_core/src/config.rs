@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ClientError, Result};
 
-/// CPU, Memory, Disk, Load (1m), Collection failures. Five fleet-wide requests per poll, not
-/// twelve.
+/// CPU, memory (ratio and bytes), disk (ratio and bytes), load (1m), collection failures. Seven
+/// fleet-wide requests per poll, not thirteen.
 ///
 /// Collection failures is in the default set because it is the only signal that catches an agent
 /// beating happily while its sampling fails every cycle: a failed collection re-exports the
@@ -51,7 +51,7 @@ pub const DEFAULT_OVERVIEW_METRICS: [MetricKind; 7] = [
 
 /// Every modelled metric except [`MetricKind::AgentHeartbeat`], whose value nothing reads —
 /// liveness comes from the *timestamp* of the newest heartbeat bucket, never from its count.
-pub const DEFAULT_DETAIL_METRICS: [MetricKind; 11] = [
+pub const DEFAULT_DETAIL_METRICS: [MetricKind; 12] = [
     MetricKind::CpuUtilization,
     MetricKind::MemoryUtilization,
     MetricKind::MemoryUsage,
@@ -62,6 +62,10 @@ pub const DEFAULT_DETAIL_METRICS: [MetricKind; 11] = [
     MetricKind::LoadAverage5m,
     MetricKind::LoadAverage15m,
     MetricKind::SystemUptime,
+    // Detail only. A Mac reports a sensor per component, and how many is not known until the host
+    // is measured, so folding every one of them into the overview would put an unbounded number of
+    // series on every poll of every host.
+    MetricKind::Temperature,
     MetricKind::AgentCollectionFailures,
 ];
 
@@ -957,6 +961,25 @@ mod tests {
             .collect();
 
         assert_eq!(DEFAULT_DETAIL_METRICS.to_vec(), expected);
+    }
+
+    #[test]
+    fn temperature_is_in_the_detail_set_and_not_the_overview_set() {
+        // A Mac reports a sensor per component, so folding every one of them into the overview
+        // would cost an unbounded number of series on every poll of every host. What the two sets
+        // then *do* is pinned in plan.rs, where the queries are actually built.
+        assert!(DEFAULT_DETAIL_METRICS.contains(&MetricKind::Temperature));
+        assert!(!DEFAULT_OVERVIEW_METRICS.contains(&MetricKind::Temperature));
+        assert_eq!(
+            DEFAULT_OVERVIEW_METRICS.len(),
+            7,
+            "every entry here is one fleet-wide request on every poll"
+        );
+        assert_eq!(
+            DEFAULT_DETAIL_METRICS.len(),
+            MetricKind::ALL.len() - 1,
+            "the heartbeat is the only metric a focused host does not chart"
+        );
     }
 
     #[test]

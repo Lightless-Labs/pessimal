@@ -148,7 +148,7 @@ struct AlertRulesSettings: View {
 
 /// Authors one new rule through `draft_alert_rule`.
 ///
-/// Nothing here decides whether a rule is acceptable. The metric picker offers all twelve kinds
+/// Nothing here decides whether a rule is acceptable. The metric picker offers all thirteen kinds
 /// including `agentHeartbeat`, which the core refuses — a silent host is liveness's business, not an
 /// alert's — because the core's refusal explains *why*, and a picker that quietly omits the option
 /// teaches the user nothing. Same for an empty host set, a zero name, a non-finite threshold: typed,
@@ -343,6 +343,7 @@ private let orderedMetrics: [MetricKindRecord] = [
     .loadAverage5m,
     .loadAverage15m,
     .systemUptime,
+    .temperature,
     .agentHeartbeat,
     .agentCollectionFailures,
 ]
@@ -366,6 +367,7 @@ private func label(_ metric: MetricKindRecord) -> String {
     case .loadAverage5m: return "Load average (5m)"
     case .loadAverage15m: return "Load average (15m)"
     case .systemUptime: return "Uptime"
+    case .temperature: return "Temperature"
     case .agentHeartbeat: return "Agent heartbeat"
     case .agentCollectionFailures: return "Agent collection failures"
     }
@@ -386,6 +388,8 @@ private func unitHint(_ metric: MetricKindRecord) -> String {
         return "processes"
     case .systemUptime:
         return "seconds"
+    case .temperature:
+        return "degrees Celsius"
     case .agentHeartbeat, .agentCollectionFailures:
         return "count"
     }

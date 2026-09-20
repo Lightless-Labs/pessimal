@@ -170,7 +170,7 @@ struct SettingsAlertRulesSection: View {
 
 /// Authors one new rule through `draftAlertRule`.
 ///
-/// Nothing here decides whether a rule is acceptable. The metric picker offers all twelve kinds
+/// Nothing here decides whether a rule is acceptable. The metric picker offers all thirteen kinds
 /// including the agent heartbeat, which core refuses — a silent host is liveness's business, not an
 /// alert's — because core's refusal explains *why*, and a picker that quietly omits the option
 /// teaches the user nothing. Same for an empty host set, a blank name, a non-finite threshold: typed,
@@ -389,6 +389,7 @@ private let settingsOrderedMetrics: [MetricKindRecord] = [
     .loadAverage5m,
     .loadAverage15m,
     .systemUptime,
+    .temperature,
     .agentHeartbeat,
     .agentCollectionFailures,
 ]
@@ -414,6 +415,7 @@ private func settingsMetricLabel(_ metric: MetricKindRecord) -> String {
     case .loadAverage5m: return "Load average (5m)"
     case .loadAverage15m: return "Load average (15m)"
     case .systemUptime: return "Uptime"
+    case .temperature: return "Temperature"
     case .agentHeartbeat: return "Agent heartbeat"
     case .agentCollectionFailures: return "Agent collection failures"
     }
@@ -452,6 +454,8 @@ private func settingsThresholdHint(_ metric: MetricKindRecord) -> String {
         return "4"
     case .systemUptime:
         return "seconds"
+    case .temperature:
+        return "80"
     case .agentHeartbeat, .agentCollectionFailures:
         return "1"
     }
@@ -474,6 +478,11 @@ private func settingsThresholdFooter(_ metric: MetricKindRecord) -> String {
         return "A run-queue depth, not a percentage."
     case .systemUptime:
         return "In seconds."
+    case .temperature:
+        // One rule covers every sensor on a host, and core picks which one it judges: `normalize`
+        // reduces an above-rule with `Max` and a below-rule with `Min`. The alert row then names
+        // that sensor, so a firing rule says which reading breached.
+        return "In degrees Celsius. An above rule reads the hottest sensor, a below rule the coolest."
     case .agentHeartbeat:
         return "Core refuses rules on the heartbeat: a silent host is liveness's business."
     case .agentCollectionFailures:

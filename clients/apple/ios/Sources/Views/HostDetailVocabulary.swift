@@ -89,6 +89,8 @@ extension FleetStyle {
             return isRate ? "count added since the previous sample" : "count"
         case .load:
             return "load average, a run-queue depth"
+        case .celsius:
+            return "degrees Celsius"
         }
     }
 }

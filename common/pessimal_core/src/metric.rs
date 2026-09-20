@@ -1,6 +1,6 @@
 //! Metric identity, units, and time series.
 //!
-//! Metric names follow the OpenTelemetry system semantic conventions so that whatever backend
+//! Metric names follow the OpenTelemetry semantic conventions so that whatever backend
 //! ingests the agent's OTLP — SigNoz, ClickStack, Honeycomb, a bare collector — stores them under
 //! names it already understands. [`MetricKind`] is the closed set Pessimal charts and alerts on;
 //! anything else in the backend is still exported, just not modelled here.
@@ -44,6 +44,8 @@ pub enum MetricUnit {
     Count,
     /// Run-queue load average — dimensionless but not a ratio, so not [`MetricUnit::Ratio`].
     Load,
+    /// Degrees Celsius. OTLP unit `Cel`, which is how UCUM spells it.
+    Celsius,
 }
 
 impl MetricUnit {
@@ -54,6 +56,7 @@ impl MetricUnit {
             Self::Bytes => "By",
             Self::Seconds => "s",
             Self::Count => "{count}",
+            Self::Celsius => "Cel",
         }
     }
 }
@@ -72,6 +75,10 @@ pub enum MetricKind {
     LoadAverage5m,
     LoadAverage15m,
     SystemUptime,
+    /// One hardware sensor's reading. The semantic conventions have no CPU or GPU temperature
+    /// metric — a sensor is its own component — so the sensor's own name is exported as an
+    /// attribute and Pessimal classifies nothing.
+    Temperature,
     /// Pessimal's own liveness beat. Its most recent timestamp is what [`crate::Liveness`] reads.
     AgentHeartbeat,
     /// Cumulative host-sampling failures. An agent can be beating happily while collecting
@@ -81,7 +88,7 @@ pub enum MetricKind {
 
 impl MetricKind {
     /// Every modelled metric, in display order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::CpuUtilization,
         Self::MemoryUtilization,
         Self::MemoryUsage,
@@ -92,6 +99,7 @@ impl MetricKind {
         Self::LoadAverage5m,
         Self::LoadAverage15m,
         Self::SystemUptime,
+        Self::Temperature,
         Self::AgentHeartbeat,
         Self::AgentCollectionFailures,
     ];
@@ -110,19 +118,33 @@ impl MetricKind {
             Self::LoadAverage5m => "system.cpu.load_average.5m",
             Self::LoadAverage15m => "system.cpu.load_average.15m",
             Self::SystemUptime => "system.uptime",
+            Self::Temperature => "hw.temperature",
             Self::AgentHeartbeat => "pessimal.agent.heartbeat",
             Self::AgentCollectionFailures => "pessimal.agent.collection_failures",
         }
     }
 
     /// Which OTel instrument this metric is exported as.
+    ///
+    /// The match is exhaustive on purpose. A `_` arm would hand every metric added later a gauge
+    /// without anyone deciding that, and a cumulative total charted as a gauge only ever goes up.
+    /// Listing every variant makes a new one a compile error until someone names its instrument.
     #[must_use]
     pub fn instrument_kind(self) -> InstrumentKind {
         match self {
             Self::NetworkIo | Self::AgentHeartbeat | Self::AgentCollectionFailures => {
                 InstrumentKind::Counter
             }
-            _ => InstrumentKind::Gauge,
+            Self::CpuUtilization
+            | Self::MemoryUtilization
+            | Self::MemoryUsage
+            | Self::FilesystemUtilization
+            | Self::FilesystemUsage
+            | Self::LoadAverage1m
+            | Self::LoadAverage5m
+            | Self::LoadAverage15m
+            | Self::SystemUptime
+            | Self::Temperature => InstrumentKind::Gauge,
         }
     }
 
@@ -135,6 +157,7 @@ impl MetricKind {
             Self::MemoryUsage | Self::FilesystemUsage | Self::NetworkIo => MetricUnit::Bytes,
             Self::SystemUptime => MetricUnit::Seconds,
             Self::LoadAverage1m | Self::LoadAverage5m | Self::LoadAverage15m => MetricUnit::Load,
+            Self::Temperature => MetricUnit::Celsius,
             Self::AgentHeartbeat | Self::AgentCollectionFailures => MetricUnit::Count,
         }
     }
@@ -153,6 +176,7 @@ impl MetricKind {
             Self::LoadAverage5m => "Load (5m)",
             Self::LoadAverage15m => "Load (15m)",
             Self::SystemUptime => "Uptime",
+            Self::Temperature => "Temperature",
             Self::AgentHeartbeat => "Heartbeat",
             Self::AgentCollectionFailures => "Collection failures",
         }
@@ -482,6 +506,24 @@ mod tests {
         assert_eq!(MetricKind::MemoryUsage.unit(), MetricUnit::Bytes);
         assert_eq!(MetricUnit::Ratio.otel_unit(), "1");
         assert_eq!(MetricUnit::Bytes.otel_unit(), "By");
+    }
+
+    #[test]
+    fn temperature_is_a_gauge_in_celsius() {
+        assert_eq!(MetricKind::Temperature.otel_name(), "hw.temperature");
+        assert_eq!(
+            MetricKind::Temperature.instrument_kind(),
+            InstrumentKind::Gauge,
+            "a sensor reading is a level, not a total"
+        );
+        assert_eq!(MetricKind::Temperature.unit(), MetricUnit::Celsius);
+        assert_eq!(MetricUnit::Celsius.otel_unit(), "Cel");
+    }
+
+    #[test]
+    fn all_metrics_include_temperature() {
+        assert!(MetricKind::ALL.contains(&MetricKind::Temperature));
+        assert_eq!(MetricKind::ALL.len(), 13);
     }
 
     #[test]

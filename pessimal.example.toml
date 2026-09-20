@@ -56,3 +56,12 @@ filesystems = ["/"]
 
 # Report network I/O per interface instead of one host total.
 per_interface_network = false
+
+# Report hardware temperatures. Off by default: how many sensors a host has is unbounded and
+# unknown until that host is measured, and every sensor is a series of its own.
+temperatures = false
+
+# Sensor labels to report when temperatures is on. An empty list means every sensor the host
+# offers. Turn temperatures on and run `pessimal-agent --sample` to see what this host calls its
+# sensors, then name the ones you want.
+temperature_sensors = []

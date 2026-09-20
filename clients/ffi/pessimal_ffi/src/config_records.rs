@@ -50,7 +50,7 @@ use crate::convert::{
 /// list can name what it is drawing.
 ///
 /// Variant-for-variant with [`MetricKind`], in the domain's order, which is display order. Both
-/// `From` impls below match exhaustively with no wildcard: a thirteenth metric in core stops this
+/// `From` impls below match exhaustively with no wildcard: a fourteenth metric in core stops this
 /// file compiling, which is the only way the Swift `switch` statements over this enum get updated
 /// in the same commit rather than at the next iOS build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
@@ -65,6 +65,9 @@ pub enum MetricKindRecord {
     LoadAverage5m,
     LoadAverage15m,
     SystemUptime,
+    /// One hardware sensor's reading, one series per sensor. A host reports as many series as it
+    /// has sensors, which is why core's default puts it in the detail metrics and not the overview.
+    Temperature,
     /// Pessimal's own liveness beat. Not alertable — a silent host is liveness's business — which
     /// is why [`draft_alert_rule`] refuses it.
     AgentHeartbeat,
@@ -85,6 +88,7 @@ impl From<MetricKind> for MetricKindRecord {
             MetricKind::LoadAverage5m => Self::LoadAverage5m,
             MetricKind::LoadAverage15m => Self::LoadAverage15m,
             MetricKind::SystemUptime => Self::SystemUptime,
+            MetricKind::Temperature => Self::Temperature,
             MetricKind::AgentHeartbeat => Self::AgentHeartbeat,
             MetricKind::AgentCollectionFailures => Self::AgentCollectionFailures,
         }
@@ -104,6 +108,7 @@ impl From<MetricKindRecord> for MetricKind {
             MetricKindRecord::LoadAverage5m => Self::LoadAverage5m,
             MetricKindRecord::LoadAverage15m => Self::LoadAverage15m,
             MetricKindRecord::SystemUptime => Self::SystemUptime,
+            MetricKindRecord::Temperature => Self::Temperature,
             MetricKindRecord::AgentHeartbeat => Self::AgentHeartbeat,
             MetricKindRecord::AgentCollectionFailures => Self::AgentCollectionFailures,
         }

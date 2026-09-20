@@ -132,6 +132,17 @@ pub struct CollectionConfig {
     /// Report per-interface network I/O rather than a host total.
     #[serde(default)]
     pub per_interface_network: bool,
+    /// Report hardware temperatures.
+    ///
+    /// Off unless asked for. How many sensors a host has is unbounded and unknown until that host
+    /// is measured, and every sensor is a series of its own, so switching this on sight unseen can
+    /// multiply what one host costs the backend.
+    #[serde(default)]
+    pub temperatures: bool,
+    /// Sensor labels to report, when `temperatures` is on. Empty means every sensor `sysinfo`
+    /// reports.
+    #[serde(default)]
+    pub temperature_sensors: Vec<String>,
 }
 
 impl Default for CollectionConfig {
@@ -139,6 +150,8 @@ impl Default for CollectionConfig {
         Self {
             filesystems: vec!["/".to_owned()],
             per_interface_network: false,
+            temperatures: false,
+            temperature_sensors: Vec::new(),
         }
     }
 }
@@ -385,6 +398,8 @@ mod tests {
             [collection]
             filesystems = ["/", "/data"]
             per_interface_network = true
+            temperatures = true
+            temperature_sensors = ["PMU tdev1"]
         "#,
         )
         .expect("valid");
@@ -402,6 +417,44 @@ mod tests {
             Some("eu-west-3")
         );
         assert!(config.collection.per_interface_network);
+        assert!(config.collection.temperatures);
+        assert_eq!(
+            config.collection.temperature_sensors,
+            vec!["PMU tdev1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn temperature_collection_is_off_by_default() {
+        let config = AgentConfig::from_toml(MINIMAL).expect("valid");
+        assert!(!config.collection.temperatures);
+        assert!(config.collection.temperature_sensors.is_empty());
+        assert_eq!(config.collection, CollectionConfig::default());
+    }
+
+    #[test]
+    fn a_config_with_temperature_keys_round_trips() {
+        let config = AgentConfig::from_toml(
+            r#"
+            [export]
+            endpoint = "http://localhost:4317"
+
+            [collection]
+            temperatures = true
+            temperature_sensors = ["PMU tdev1", "SOC MTR Temp Sensor0"]
+        "#,
+        )
+        .expect("valid");
+
+        assert!(config.collection.temperatures);
+        assert_eq!(
+            config.collection.temperature_sensors,
+            vec!["PMU tdev1".to_owned(), "SOC MTR Temp Sensor0".to_owned()]
+        );
+
+        let rendered = toml::to_string(&config.collection).expect("serialises");
+        let parsed: CollectionConfig = toml::from_str(&rendered).expect("the render parses");
+        assert_eq!(parsed, config.collection);
     }
 
     #[test]

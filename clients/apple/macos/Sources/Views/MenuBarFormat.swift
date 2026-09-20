@@ -61,6 +61,20 @@ enum MenuBarFormat {
         case .load:
             // Not a ratio and not a percentage — a run-queue depth, which is read to two places.
             return value.formatted(.number.precision(.fractionLength(2)))
+
+        case .celsius:
+            // `usage: .asProvided` pins the scale. Measured: without it an `en_US` locale converts
+            // to Fahrenheit and the narrow width prints "114.1°" with no scale letter — a different
+            // number from the one an alert rule's threshold is compared against, since core exports
+            // UCUM `Cel`. With it, every locale keeps `45.6°C`.
+            return Measurement(value: value, unit: UnitTemperature.celsius)
+                .formatted(
+                    .measurement(
+                        width: .narrow,
+                        usage: .asProvided,
+                        numberFormatStyle: .number.precision(.fractionLength(1))
+                    )
+                )
         }
     }
 

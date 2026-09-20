@@ -85,6 +85,8 @@ pub enum MetricUnitRecord {
     Count,
     /// Run-queue load average — dimensionless, but not a ratio and not a percentage.
     Load,
+    /// Degrees Celsius.
+    Celsius,
 }
 
 impl From<MetricUnit> for MetricUnitRecord {
@@ -95,6 +97,7 @@ impl From<MetricUnit> for MetricUnitRecord {
             MetricUnit::Seconds => Self::Seconds,
             MetricUnit::Count => Self::Count,
             MetricUnit::Load => Self::Load,
+            MetricUnit::Celsius => Self::Celsius,
         }
     }
 }
@@ -107,6 +110,7 @@ impl From<MetricUnitRecord> for MetricUnit {
             MetricUnitRecord::Seconds => Self::Seconds,
             MetricUnitRecord::Count => Self::Count,
             MetricUnitRecord::Load => Self::Load,
+            MetricUnitRecord::Celsius => Self::Celsius,
         }
     }
 }
@@ -869,7 +873,7 @@ pub struct AlertViewRecord {
     pub fires_at_millis: Option<i64>,
     /// The reduced value the phase was judged on.
     pub latest_value: Option<f64>,
-    /// Which mount or interface held it.
+    /// Which mount, interface or sensor held it.
     pub series_label: Option<String>,
     pub evidence: AlertEvidenceRecord,
     pub is_rate: bool,
@@ -1129,6 +1133,7 @@ mod tests {
             MetricUnit::Seconds,
             MetricUnit::Count,
             MetricUnit::Load,
+            MetricUnit::Celsius,
         ] {
             let record = MetricUnitRecord::from(original);
             assert_eq!(original, MetricUnit::from(record));

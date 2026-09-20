@@ -1561,7 +1561,7 @@ public struct AlertViewRecord: Equatable, Hashable {
      */
     public let latestValue: Double?
     /**
-     * Which mount or interface held it.
+     * Which mount, interface or sensor held it.
      */
     public let seriesLabel: String?
     public let evidence: AlertEvidenceRecord
@@ -1596,7 +1596,7 @@ public struct AlertViewRecord: Equatable, Hashable {
          * The reduced value the phase was judged on.
          */latestValue: Double?, 
         /**
-         * Which mount or interface held it.
+         * Which mount, interface or sensor held it.
          */seriesLabel: String?, evidence: AlertEvidenceRecord, isRate: Bool, 
         /**
          * Set when the stored rule failed core's validation — a `NaN` threshold makes every comparator
@@ -5100,7 +5100,7 @@ public func FfiConverterTypeMetricAvailabilityRecord_lower(_ value: MetricAvaila
  * list can name what it is drawing.
  *
  * Variant-for-variant with [`MetricKind`], in the domain's order, which is display order. Both
- * `From` impls below match exhaustively with no wildcard: a thirteenth metric in core stops this
+ * `From` impls below match exhaustively with no wildcard: a fourteenth metric in core stops this
  * file compiling, which is the only way the Swift `switch` statements over this enum get updated
  * in the same commit rather than at the next iOS build.
  */
@@ -5117,6 +5117,11 @@ public enum MetricKindRecord: Equatable, Hashable {
     case loadAverage5m
     case loadAverage15m
     case systemUptime
+    /**
+     * One hardware sensor's reading, one series per sensor. A host reports as many series as it
+     * has sensors, which is why core's default puts it in the detail metrics and not the overview.
+     */
+    case temperature
     /**
      * Pessimal's own liveness beat. Not alertable — a silent host is liveness's business — which
      * is why [`draft_alert_rule`] refuses it.
@@ -5167,9 +5172,11 @@ public struct FfiConverterTypeMetricKindRecord: FfiConverterRustBuffer {
         
         case 10: return .systemUptime
         
-        case 11: return .agentHeartbeat
+        case 11: return .temperature
         
-        case 12: return .agentCollectionFailures
+        case 12: return .agentHeartbeat
+        
+        case 13: return .agentCollectionFailures
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5219,12 +5226,16 @@ public struct FfiConverterTypeMetricKindRecord: FfiConverterRustBuffer {
             writeInt(&buf, Int32(10))
         
         
-        case .agentHeartbeat:
+        case .temperature:
             writeInt(&buf, Int32(11))
         
         
-        case .agentCollectionFailures:
+        case .agentHeartbeat:
             writeInt(&buf, Int32(12))
+        
+        
+        case .agentCollectionFailures:
+            writeInt(&buf, Int32(13))
         
         }
     }
@@ -5272,6 +5283,10 @@ public enum MetricUnitRecord: Equatable, Hashable {
      * Run-queue load average — dimensionless, but not a ratio and not a percentage.
      */
     case load
+    /**
+     * Degrees Celsius.
+     */
+    case celsius
 
 
 
@@ -5303,6 +5318,8 @@ public struct FfiConverterTypeMetricUnitRecord: FfiConverterRustBuffer {
         
         case 5: return .load
         
+        case 6: return .celsius
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -5329,6 +5346,10 @@ public struct FfiConverterTypeMetricUnitRecord: FfiConverterRustBuffer {
         
         case .load:
             writeInt(&buf, Int32(5))
+        
+        
+        case .celsius:
+            writeInt(&buf, Int32(6))
         
         }
     }
@@ -5740,8 +5761,8 @@ public func FfiConverterTypePollFailureSourceRecord_lower(_ value: PollFailureSo
  * one.
  *
  * The metric travels as its OTel instrument name rather than as a mirrored
- * [`MetricKind`]: twelve duplicated variants in a module whose real code path never emits any of
- * them would be twelve places to forget when the domain grows a metric, and `MetricKind` belongs
+ * [`MetricKind`]: thirteen duplicated variants in a module whose real code path never emits any of
+ * them would be thirteen places to forget when the domain grows a metric, and `MetricKind` belongs
  * to the modules that actually expose metrics. The name is the domain's own
  * [`MetricKind::otel_name`], and the way back is the domain's own [`MetricKind::from_otel_name`],
  * so there is no second copy of that table here.
