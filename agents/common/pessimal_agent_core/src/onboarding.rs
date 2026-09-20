@@ -38,6 +38,10 @@ pub struct Answers {
     pub dataset: Option<String>,
     pub environment: String,
     pub interval_seconds: u64,
+    /// Whether to report hardware temperatures at all.
+    pub temperatures: bool,
+    /// Which sensors to report. Empty means every one the host offers.
+    pub temperature_sensors: Vec<String>,
 }
 
 impl Answers {
@@ -85,7 +89,11 @@ impl Answers {
                 environment: self.environment.trim().to_owned(),
                 ..previous.resource
             },
-            collection: previous.collection,
+            collection: CollectionConfig {
+                temperatures: self.temperatures,
+                temperature_sensors: self.temperature_sensors,
+                ..previous.collection
+            },
         };
         config.validate()?;
         // Credentials too, unlike `AgentConfig::from_file`: the user is answering the questions
@@ -716,6 +724,8 @@ mod tests {
             dataset: None,
             environment: "infrastructure".to_owned(),
             interval_seconds: 30,
+            temperatures: false,
+            temperature_sensors: Vec::new(),
         }
     }
 
@@ -743,8 +753,6 @@ mod tests {
             [collection]
             filesystems = ["/", "/data"]
             per_interface_network = true
-            temperatures = true
-            temperature_sensors = ["PMU tdev1", "gas gauge battery"]
         "#,
         )
         .expect("valid");
@@ -769,11 +777,8 @@ mod tests {
             vec!["/".to_owned(), "/data".to_owned()]
         );
         assert!(config.collection.per_interface_network);
-        assert!(config.collection.temperatures);
-        assert_eq!(
-            config.collection.temperature_sensors,
-            vec!["PMU tdev1".to_owned(), "gas gauge battery".to_owned()]
-        );
+        // Not the temperature keys: `init` asks about those, so they are answers rather than
+        // things it carries through. See `the_temperature_answers_reach_the_config`.
     }
 
     #[test]
@@ -802,6 +807,45 @@ mod tests {
             config,
             "every field of a non-default config must survive the round trip:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn the_temperature_answers_reach_the_config() {
+        let mut answers = answers();
+        answers.temperatures = true;
+        answers.temperature_sensors = vec!["PMU tdev1".to_owned()];
+
+        let config = answers.into_config(None).expect("valid");
+
+        assert!(config.collection.temperatures);
+        assert_eq!(
+            config.collection.temperature_sensors,
+            vec!["PMU tdev1".to_owned()]
+        );
+        // And survive the file, which is the whole point of asking.
+        let parsed = AgentConfig::from_toml(&render_toml(&config)).expect("the render parses");
+        assert_eq!(parsed.collection, config.collection);
+    }
+
+    #[test]
+    fn turning_temperatures_off_clears_the_sensor_list_it_carried() {
+        // Otherwise the list sits in the file describing a collection that is not happening, and
+        // turning it back on silently resumes a selection the user has forgotten making.
+        let existing = AgentConfig::from_toml(
+            r#"
+            [export]
+            endpoint = "http://localhost:4317"
+            [collection]
+            temperatures = true
+            temperature_sensors = ["PMU tdev1"]
+        "#,
+        )
+        .expect("valid");
+
+        let config = answers().into_config(Some(existing)).expect("valid");
+
+        assert!(!config.collection.temperatures);
+        assert!(config.collection.temperature_sensors.is_empty());
     }
 
     #[test]

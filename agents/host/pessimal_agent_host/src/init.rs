@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Duration;
-use pessimal_agent_core::config::AgentConfig;
+use pessimal_agent_core::config::{AgentConfig, CollectionConfig};
 use pessimal_agent_core::error::{AgentError, Result};
 use pessimal_agent_core::onboarding::{
     self, Answers, ConfigLocation, KeyPlacement, LAUNCH_AGENT_LABEL, ServicePlan, SystemFacts,
@@ -168,6 +168,14 @@ pub struct InitArgs {
     /// Read the API key from stdin, up to the first newline.
     #[arg(long)]
     pub api_key_stdin: bool,
+
+    /// Report hardware temperatures, or not. Omitted, the question is asked.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub temperatures: Option<bool>,
+
+    /// Which sensors to report, by the labels `--sample` lists. Omitted, every one of them.
+    #[arg(long, value_delimiter = ',')]
+    pub temperature_sensors: Option<Vec<String>>,
 
     /// Overwrite an existing config without asking. The previous file is kept as `<name>.bak`
     /// either way.
@@ -409,6 +417,19 @@ fn from_arguments(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Ans
             })?,
     };
     let api_key = read_key_argument(args, preset, existing)?;
+    let temperatures = args
+        .temperatures
+        .or_else(|| existing.map(|config| config.collection.temperatures))
+        .unwrap_or(false);
+    let temperature_sensors = if temperatures {
+        args.temperature_sensors.clone().unwrap_or_else(|| {
+            existing.map_or_else(Vec::new, |config| {
+                config.collection.temperature_sensors.clone()
+            })
+        })
+    } else {
+        Vec::new()
+    };
 
     Ok(Answers {
         preset,
@@ -427,6 +448,8 @@ fn from_arguments(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Ans
             .interval_seconds
             .or_else(|| existing.map(|config| config.export.interval_seconds))
             .unwrap_or(pessimal_agent_core::config::DEFAULT_INTERVAL_SECONDS),
+        temperatures,
+        temperature_sensors,
     })
 }
 
@@ -544,6 +567,8 @@ fn ask(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Answers> {
         )?,
     };
 
+    let (temperatures, temperature_sensors) = ask_about_temperatures(args, existing)?;
+
     Ok(Answers {
         preset,
         endpoint,
@@ -552,7 +577,103 @@ fn ask(args: &InitArgs, existing: Option<&AgentConfig>) -> Result<Answers> {
         dataset,
         environment,
         interval_seconds,
+        temperatures,
+        temperature_sensors,
     })
+}
+
+/// Whether to report temperatures, and which sensors.
+///
+/// Asked against the sensors this host actually offers, listed by name, because the labels are not
+/// guessable: on Apple silicon they are HID product strings, on Linux they are synthesised from
+/// hwmon files, and nobody can type one they have not seen. A host that offers none is told so and
+/// the question ends there — turning collection on would report nothing.
+fn ask_about_temperatures(
+    args: &InitArgs,
+    existing: Option<&AgentConfig>,
+) -> Result<(bool, Vec<String>)> {
+    if let Some(wanted) = args.temperatures {
+        let sensors = args.temperature_sensors.clone().unwrap_or_else(|| {
+            existing.map_or_else(Vec::new, |config| {
+                config.collection.temperature_sensors.clone()
+            })
+        });
+        return Ok((wanted, if wanted { sensors } else { Vec::new() }));
+    }
+
+    let offered = sensors_on_this_host();
+    if offered.is_empty() {
+        say("This host reports no temperature sensors, so temperatures are left off.");
+        return Ok((false, Vec::new()));
+    }
+
+    say("");
+    say(&format!(
+        "This host reports {} temperature sensors:",
+        offered.len()
+    ));
+    for label in &offered {
+        say(&format!("  {label}"));
+    }
+
+    let was_on = existing.is_some_and(|config| config.collection.temperatures);
+    if !confirm("Report temperatures?", was_on)? {
+        return Ok((false, Vec::new()));
+    }
+
+    let previous = existing
+        .map(|config| config.collection.temperature_sensors.join(", "))
+        .filter(|list| !list.is_empty())
+        .unwrap_or_else(|| "all".to_owned());
+    let chosen = ask_until(
+        "Which sensors, separated by commas (or `all`)",
+        &previous,
+        |raw| select_sensor_names(raw, &offered),
+    )?;
+    Ok((true, chosen))
+}
+
+/// Turns the typed list into sensor labels, refusing a name this host does not offer.
+///
+/// Pure, and beside the flow rather than inside it, so "a typo is caught while the list is still on
+/// screen" is a test rather than a hope.
+fn select_sensor_names(raw: &str, offered: &[String]) -> Result<Vec<String>> {
+    let value = raw.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("all") {
+        // Empty rather than every label: the config means "every sensor this host offers", which
+        // stays true when the host grows one.
+        return Ok(Vec::new());
+    }
+    let mut chosen = Vec::new();
+    for name in value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let Some(label) = offered.iter().find(|label| label.as_str() == name) else {
+            return Err(AgentError::Config(format!(
+                "this host offers no sensor called {name:?}. Type the names as they are listed, or `all`."
+            )));
+        };
+        if !chosen.contains(label) {
+            chosen.push(label.clone());
+        }
+    }
+    if chosen.is_empty() {
+        return Err(AgentError::Config(
+            "name at least one sensor, or `all`".to_owned(),
+        ));
+    }
+    Ok(chosen)
+}
+
+/// The sensor labels this host offers right now.
+fn sensors_on_this_host() -> Vec<String> {
+    let probing = CollectionConfig {
+        temperatures: true,
+        ..CollectionConfig::default()
+    };
+    HostCollector::new(&probing).sensor_selection().seen
 }
 
 /// Asks until the answer is accepted, showing the reason each time.
@@ -795,5 +916,64 @@ fn run_command(argv: &[String]) -> Result<()> {
             "`{}` exited with {status}",
             argv.join(" ")
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offered() -> Vec<String> {
+        vec![
+            "PMU tdev1".to_owned(),
+            "gas gauge battery".to_owned(),
+            "NAND CH0 temp".to_owned(),
+        ]
+    }
+
+    #[test]
+    fn all_means_every_sensor_including_the_ones_this_host_grows_later() {
+        // Empty, not the three labels: the config means "every sensor this host offers", which
+        // stays true when a future macOS names one differently.
+        for answer in ["", "  ", "all", "ALL"] {
+            assert!(
+                select_sensor_names(answer, &offered())
+                    .expect("accepted")
+                    .is_empty(),
+                "{answer:?} should mean every sensor"
+            );
+        }
+    }
+
+    #[test]
+    fn named_sensors_are_kept_in_the_order_they_were_typed() {
+        assert_eq!(
+            select_sensor_names("NAND CH0 temp, PMU tdev1", &offered()).expect("accepted"),
+            vec!["NAND CH0 temp".to_owned(), "PMU tdev1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_name_this_host_does_not_offer_is_refused_while_the_list_is_still_on_screen() {
+        // These labels cannot be guessed — HID product strings on Apple silicon, synthesised hwmon
+        // names on Linux — so a typo must be caught here rather than becoming a config that
+        // reports nothing and explains nothing.
+        let error = select_sensor_names("CPU", &offered()).expect_err("not offered");
+        let message = format!("{error}");
+        assert!(message.contains("\"CPU\""), "{message}");
+        assert!(message.contains("as they are listed"), "{message}");
+    }
+
+    #[test]
+    fn a_repeated_name_is_kept_once() {
+        assert_eq!(
+            select_sensor_names("PMU tdev1, PMU tdev1", &offered()).expect("accepted"),
+            vec!["PMU tdev1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_list_of_nothing_but_commas_is_refused() {
+        select_sensor_names(",, ,", &offered()).expect_err("no sensor named");
     }
 }

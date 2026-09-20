@@ -1,6 +1,6 @@
 # Pessimal Handoff
 
-**Updated:** 2026-09-15
+**Updated:** 2026-09-20
 
 ## Current state
 
@@ -11,7 +11,7 @@
 - **M2 host agent** — done. `pessimal_agent_core` (config, backend presets, cached collection,
   resource identity, OTLP export) and `pessimal_agent_host` (sysinfo collector, CLI, run loop).
   Verified end to end against a real OpenTelemetry collector over **both** gRPC and HTTP/protobuf:
-  12 metrics arrive with the right names, units, and instrument types.
+  13 metrics arrive with the right names, units, and instrument types.
 - 156 tests, `clippy -D warnings` clean, `cargo fmt --check` clean.
 - **M3 SigNoz adapter** — `pessimal_query_signoz` implements `TelemetryQuery` against
   `/api/v5/query_range`. Response types taken from SigNoz's own Go source, not guessed; the naming
@@ -206,6 +206,20 @@ Two consequences worth knowing:
 - The iOS detail screen still lists the usage series as rows in their own right. That section's
   contract is "one row per series gathered", and hiding one because its number also appears above
   would make an inventory into a summary.
+
+- **Host temperatures — done, 2026-09-20.** The agent exports `hw.temperature`, the semantic
+  conventions' hardware temperature metric: a gauge in Celsius, one series per sensor, carrying
+  `hw.id` and `hw.name` — both the sensor's label as the host spells it, because there is no
+  portable identifier and the conventions have no CPU or GPU temperature metric. Off by default:
+  the sensor count per host is unbounded until measured. `pessimal-agent init` lists the sensors a
+  host offers and asks which to report; the labels cannot be guessed, so nobody can type one they
+  have not seen. Temperature is a detail metric, never fleet-wide, and `plan.rs` pins that.
+  **This project's own VM reports zero sensors** — no SMC, no temperature HID services — so the
+  path is unmeasured here and the first real readings come from the owner's Mac.
+- **Detail metrics are fetched at last.** Core has planned a second tier for the focused host since
+  M3, and nothing ever set `focus`, so that tier ran for nobody. The iOS host screen now claims it
+  on appear and releases it on disappear. Any metric that lives only in `DEFAULT_DETAIL_METRICS`
+  was invisible before this, temperature included.
 
 ## CI and releases: Buildkite only
 
