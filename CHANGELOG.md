@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.8.0 - 2026-09-20
+#### Features
+- (**apps**) offer Test, then Save, in the iOS settings toolbar - (2ba4a61) - El-Fitz, *Claude Opus 5 (1M context)*
+#### Bug Fixes
+- (**apps**) stop claiming the data is unbelievable before the first poll - (bf3c97a) - El-Fitz, *Claude Opus 5 (1M context)*
+
+- - -
+
 ## v0.7.0 - 2026-09-20
 #### Features
 - (**agent**) let init turn temperatures on, from the sensors a host has - (f0c2d57) - El-Fitz, *Claude Opus 5*
