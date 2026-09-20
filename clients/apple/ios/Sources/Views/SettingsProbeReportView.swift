@@ -47,6 +47,12 @@ struct SettingsProbeReportView: View {
 
     let state: SettingsProbeState
 
+    /// Whether the values this report describes are still unsaved.
+    ///
+    /// Passed in rather than inferred, because the report knows what the probe found and only the
+    /// screen knows whether it has been committed. See ``finished(_:)`` for when it is said out loud.
+    let unsaved: Bool
+
     var body: some View {
         switch state {
         case .idle:
@@ -73,8 +79,22 @@ struct SettingsProbeReportView: View {
         }
     }
 
+    /// The one sentence a green tick does not say.
+    ///
+    /// The owner ran this test on a second phone, saw it succeed, left the screen and then wondered
+    /// why no hosts appeared. Nothing was wrong with the configuration: it had never been saved.
+    private static let notSavedNote = "Not saved yet — these settings take effect when you save them."
+
     @ViewBuilder
     private func finished(_ record: BackendProbeRecord) -> some View {
+        // Said on every branch where the backend answered, not only the green one. "Connected, and
+        // the listing errored" and "connected, and no hosts yet" are completed tests a reader can
+        // walk away from too. The condition is `record.connected`, which is also what flips the
+        // settings toolbar to Save, so the toolbar cannot come to offer a commit the report has said
+        // nothing about. A test that never reached the backend is not one of these, and a "not
+        // saved" line under a red report is noise.
+        let note = unsaved && record.connected ? Self.notSavedNote : nil
+
         // Core writes `message` for exactly this screen, window phrase included ("in the last 210s"
         // rather than a rounded "3 minutes", in the one message whose whole purpose is to be
         // believed). It is the headline in all four cases; anything below it elaborates, never
@@ -98,7 +118,8 @@ struct SettingsProbeReportView: View {
                     \(record.backendName) accepted the address and the key. The request that failed \
                     was \(describe(failure.request)).
                     """,
-                extra: failureDetail(failure)
+                extra: failureDetail(failure),
+                note: note
             )
         } else if !record.usable {
             report(
@@ -108,14 +129,16 @@ struct SettingsProbeReportView: View {
                 detail: """
                     \(record.backendName) answered and reported no hosts in the window. Either no \
                     agent is exporting yet, or they are exporting somewhere else.
-                    """
+                    """,
+                note: note
             )
         } else {
             report(
                 symbol: "checkmark.circle.fill",
                 tint: .green,
                 headline: record.message,
-                detail: hostSummary(record)
+                detail: hostSummary(record),
+                note: note
             )
         }
     }
@@ -126,7 +149,8 @@ struct SettingsProbeReportView: View {
         tint: Color,
         headline: String,
         detail: String?,
-        extra: String? = nil
+        extra: String? = nil,
+        note: String? = nil
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: symbol)
@@ -145,6 +169,13 @@ struct SettingsProbeReportView: View {
                     Text(extra)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                if let note {
+                    // Not `.secondary`, unlike everything else under the headline. The grey footnote
+                    // is what a reader skips once the tick has told them they are done, and this is
+                    // the line telling them they are not.
+                    Text(note)
+                        .font(.footnote.weight(.medium))
                 }
             }
             .textSelection(.enabled)

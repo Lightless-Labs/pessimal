@@ -590,11 +590,53 @@ func appVersionSmoke() throws {
               "the labelled form names the app")
 }
 
+// Which of the iOS settings screen's two actions its toolbar offers, and whether it may be pressed.
+// The rule is a pure function of the state the screen already holds — PessimalKit's
+// SettingsToolbarAction — so that it can be driven from here rather than only by tapping a phone.
+// This script is the only automated place either app's Swift runs.
+func settingsToolbarSmoke() throws {
+    func next(
+        unsaved: Bool,
+        answered: Bool,
+        canSave: Bool = true,
+        canTest: Bool = true
+    ) -> SettingsToolbarAction {
+        SettingsToolbarAction.next(
+            hasUnsavedChanges: unsaved,
+            backendAnswered: answered,
+            canSave: canSave,
+            canTest: canTest
+        )
+    }
+
+    // A draft the backend has not answered for offers Test, and goes on offering it after a test that
+    // failed — the toolbar invites the retry, and Save stays reachable in the form below, because a
+    // configuration can be perfectly saveable while a backend is down.
+    try check(next(unsaved: true, answered: false, canSave: true) == .test(enabled: true),
+              "an untested or failed draft offers Test, saveable or not")
+    try check(next(unsaved: true, answered: false, canTest: false) == .test(enabled: false),
+              "greyed while a probe is in flight or the configuration is one core refuses")
+
+    try check(next(unsaved: true, answered: true) == .save(enabled: true),
+              "once the backend has answered, the outstanding step is Save")
+    try check(next(unsaved: true, answered: true, canSave: false) == .save(enabled: false),
+              "greyed by the Save button's own rule rather than by a second one")
+
+    // Why the rule cannot read the probe alone: `save()` leaves `probeState` finished unless the
+    // connection changed, so a draft that has just been saved would go on offering to test settings
+    // that are already in force.
+    try check(next(unsaved: false, answered: true, canSave: false) == .save(enabled: false),
+              "a saved draft reads Save, disabled — never Test")
+    try check(next(unsaved: false, answered: false, canSave: false) == .save(enabled: false),
+              "and so does a screen nothing has been typed into yet")
+}
+
 do {
     try MainActor.assumeIsolated { try syncSmoke() }
     try loginItemSmoke()
     try fleetTallySmoke()
     try appVersionSmoke()
+    try settingsToolbarSmoke()
 } catch {
     print("FAILED: \(error)")
     exit(1)

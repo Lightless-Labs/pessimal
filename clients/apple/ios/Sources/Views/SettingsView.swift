@@ -26,8 +26,9 @@
 //
 //  It deliberately declares no `NavigationStack` of its own: it is pushed or presented by whoever
 //  owns the app's navigation, and nesting stacks is how a back button comes to point at the wrong
-//  place. Its two actions live in a `Form` section rather than in a toolbar for the same reason —
-//  the screen has to work whether or not there is a navigation bar above it.
+//  place. Both of its actions stay in a `Form` section for the same reason — the screen has to work
+//  whether or not there is a navigation bar above it. The toolbar item added on top of them is a
+//  second way to reach whichever one is outstanding, never the only way: see ``toolbar(_:)``.
 //
 
 #if canImport(PessimalFFI)
@@ -104,8 +105,8 @@ struct SettingsView: View {
 
     var body: some View {
         // Built once per pass and threaded through the sections that need it. The audit, the Save
-        // button's enablement and the footer all ask core the same question, and asking three times
-        // could answer three ways.
+        // button's enablement, the footer and the toolbar item all ask core the same question, and
+        // asking four times could answer four ways.
         let candidate = Result { try makeConfig() }
 
         Form {
@@ -130,12 +131,87 @@ struct SettingsView: View {
         // gesture that puts the keyboard away.
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Settings")
+        .toolbar { toolbar(candidate) }
         .onChange(of: model.config) { _, _ in
             // The config can arrive after the screen is already open: the model builds its session on
             // its own schedule. Re-seeding only when nothing is unsaved keeps that from wiping
             // something half-typed.
             reseedIfUnedited()
         }
+        .onChange(of: draft) { _, _ in
+            // A report describes the values that were in the fields when the probe ran — `runProbe`
+            // hands it the whole config, not just the address and the key, so any field can change
+            // what it would say. Once one of them changes it describes something else, and the
+            // toolbar would be offering Save for a draft nothing has tested.
+            //
+            // A probe still in flight keeps its spinner rather than being blanked here; `runProbe`
+            // drops the answer instead, because the edit that arrived mid-request is exactly the
+            // case where the report would describe values nobody typed.
+            if probeState != .running { probeState = .idle }
+        }
+    }
+
+    // MARK: - Toolbar
+
+    /// The outstanding one of the screen's two actions, at the top of the screen.
+    ///
+    /// This exists because a successful test reads as success. It is a report of a real round trip to
+    /// the backend, it appears in the backend section at the top of the form, and Save is a button
+    /// below the alert rules that the reader never scrolls to. The fix is not a third action: the
+    /// button here presses the same `runProbe()` and `save()` the form's buttons press, and both of
+    /// those stay where they are.
+    ///
+    /// Which one it offers is derived, never stored — see ``SettingsToolbarAction``. Its enablement is
+    /// the form buttons' own, passed in rather than restated.
+    private func toolbar(_ candidate: Result<FleetConfigRecord, any Error>) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            switch SettingsToolbarAction.next(
+                hasUnsavedChanges: hasUnsavedChanges,
+                backendAnswered: backendAnswered,
+                canSave: canSave(candidate),
+                canTest: canTest(candidate)
+            ) {
+            case let .test(enabled):
+                Button("Test") {
+                    Task { await runProbe() }
+                }
+                .disabled(!enabled)
+
+            case let .save(enabled):
+                Button("Save") {
+                    Task { await save() }
+                }
+                .fontWeight(.semibold)
+                .disabled(!enabled)
+            }
+        }
+    }
+
+    /// Whether the last probe reached the backend, for the values now in the fields.
+    ///
+    /// `connected` is core's and is read off the record rather than inferred from the kind of failure,
+    /// for the reason ``SettingsProbeReportView`` gives: the four outcomes want four different
+    /// repairs. A probe that never reached the backend — nothing listening, or the key rejected — is
+    /// a failed test, so the toolbar keeps offering Test. Save stays reachable in the form below it
+    /// meanwhile, because a configuration can be perfectly saveable while a backend is down.
+    private var backendAnswered: Bool {
+        if case let .finished(record) = probeState { return record.connected }
+        return false
+    }
+
+    /// The toolbar's Test, greyed while there is no configuration to test with.
+    ///
+    /// The candidate is the same one Save is judged on, so the toolbar cannot offer a test of
+    /// something the form has already refused — on a first run that means a blank environment, which
+    /// `fleetConfigDefaults` refuses, and a poll interval that is not a whole number.
+    ///
+    /// Deliberately stricter than the Test Connection row below, which stays pressable whatever is
+    /// typed. That row is where core's refusal of an address or a key is reported, and a button
+    /// greyed out by a Swift guess would withhold the explanation core would have given.
+    private func canTest(_ candidate: Result<FleetConfigRecord, any Error>) -> Bool {
+        guard !isProbing else { return false }
+        if case .failure = candidate { return false }
+        return true
     }
 
     // MARK: - Backend
@@ -170,15 +246,17 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     Text("Test Connection")
-                    if probeState == .running {
+                    if isProbing {
                         Spacer()
                         ProgressView()
                     }
                 }
             }
-            .disabled(probeState == .running)
+            .disabled(isProbing)
 
-            SettingsProbeReportView(state: probeState)
+            // The report is told whether what it describes is still unsaved, because the reader this
+            // screen was changed for is the one who reads the tick and never looks at the toolbar.
+            SettingsProbeReportView(state: probeState, unsaved: hasUnsavedChanges)
         } header: {
             Text("Backend")
         } footer: {
@@ -434,6 +512,10 @@ struct SettingsView: View {
 
     private var hasUnsavedChanges: Bool { draft != committed }
 
+    /// One name for "a probe is in flight", so the Test Connection row and the toolbar cannot come to
+    /// disagree about when the button is pressable.
+    private var isProbing: Bool { probeState == .running }
+
     private func canSave(_ candidate: Result<FleetConfigRecord, any Error>) -> Bool {
         guard hasUnsavedChanges, !isSaving else { return false }
         guard draft.rulesUnreadable == nil else { return false }
@@ -500,7 +582,13 @@ struct SettingsView: View {
     /// The whole point of the button is to answer "will these credentials work?" *before* committing
     /// them, so it builds a throwaway session from the draft. `FleetModel.probe(connection:config:)`
     /// does that with no cached state, so it cannot disturb the fleet already on screen.
+    ///
+    /// The draft the probe was asked about is captured and checked again before the answer is shown.
+    /// The fields stay editable while the request is out, and `reseed()` can empty them from under it,
+    /// so without this an answer about values nobody has typed would arrive wearing a green tick —
+    /// which is the mistake the toolbar and the report's "not saved yet" line both exist to prevent.
     private func runProbe() async {
+        let subject = draft
         probeState = .running
         do {
             let config = try makeConfig()
@@ -508,8 +596,16 @@ struct SettingsView: View {
                 connection: FleetConnection(baseURL: draft.baseURL, apiKey: draft.apiKey),
                 config: config
             )
+            guard draft == subject else {
+                probeState = .idle
+                return
+            }
             probeState = .finished(record)
         } catch {
+            guard draft == subject else {
+                probeState = .idle
+                return
+            }
             probeState = .failed(FleetModel.message(for: error))
         }
     }
