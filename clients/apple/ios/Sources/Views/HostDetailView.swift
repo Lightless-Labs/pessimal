@@ -56,6 +56,12 @@ struct HostDetailView: View {
         }
         .navigationTitle(hostId)
         .navigationBarTitleDisplayMode(.inline)
+        // Core plans the detail metrics — temperature among them — for the one host `focus` names,
+        // and for nobody when it names nobody. This screen is what names one. `task` rather than
+        // `onAppear` so the change is awaited on the way in, and `onDisappear` gives it back so the
+        // fleet overview does not keep paying for a screen that is closed.
+        .task { await model.focusHost(hostId) }
+        .onDisappear { Task { await model.focusHost(nil) } }
     }
 
     @ViewBuilder

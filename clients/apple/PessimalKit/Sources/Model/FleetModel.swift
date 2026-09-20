@@ -443,6 +443,41 @@ public final class FleetModel {
         return warnings
     }
 
+    /// Points the next poll's detail queries at one host, or at none.
+    ///
+    /// Core plans in two tiers: the overview metrics for every host, and the detail metrics for the
+    /// one host `focus` names, over a wider window (`plan.rs`, `plan_poll`). Nothing set `focus`
+    /// until now, so the detail tier never ran and the metrics in it — temperature among them —
+    /// were fetched for nobody. A screen showing one host sets it on the way in and clears it on
+    /// the way out.
+    ///
+    /// Bounded on purpose: temperature is one series per sensor, and a Mac has many, so the fleet
+    /// overview must never ask for it. One host whose screen is open is bounded by definition.
+    ///
+    /// Quiet on failure. This is a view appearing, not a user pressing Save: core refusing the
+    /// change leaves the screen showing overview metrics, which is what it showed before.
+    /// `applyConfig` records anything it could not persist through the usual path.
+    public func focusHost(_ hostId: String?) async {
+        guard let config, config.focus != hostId else { return }
+        // Rebuilt rather than mutated: a UniFFI record's fields are constants, and naming every
+        // one here means a field added to the record is a compile error rather than a value this
+        // path silently drops.
+        let focused = FleetConfigRecord(
+            environment: config.environment,
+            tuning: config.tuning,
+            rulesJson: config.rulesJson,
+            overviewMetrics: config.overviewMetrics,
+            detailMetrics: config.detailMetrics,
+            focus: hostId
+        )
+        do {
+            try await applyConfig(focused)
+        } catch {
+            // Deliberately not surfaced: see the note above. A poll with no detail tier is the
+            // status quo, not a failure the reader of a host's screen can act on.
+        }
+    }
+
     /// Drops a host and everything remembered about it — an operator decommissioning a machine.
     ///
     /// The view comes back from core rather than being patched locally, so the row disappears from
