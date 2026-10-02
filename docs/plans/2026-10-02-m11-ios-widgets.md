@@ -31,6 +31,20 @@ layout is chosen from the number of hosts:
 | 5 – 8 | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other | One row per host, as above |
 | 9 or more | The summary | The summary and the first hosts | The summary on top, then the first hosts in core's order |
 
+**Paging, in the square and the wide widget** (the owner's call, after Weather Up's widget). With
+more than one host, the first page is the layout above, and buttons step through one page per host —
+back, forward, and a "back to start" control (`arrow.uturn.backward`). Interactive widgets are
+iOS 17, which is the app's minimum. The large widget does not page: it has room for the list.
+
+- **A tap never fetches.** Each tap re-renders the widget; a fetch per tap would take seconds, cost
+  memory, and spend WidgetKit's refresh budget. The timeline provider keeps the last poll in the
+  extension's own container, and a page change renders from it. Fetching happens only on the
+  refresh schedule.
+- **The page index is the extension's own state**, keyed by the widget's configuration, so it needs
+  no App Group. Two widgets configured identically page together; accepted.
+- **Every control has a spoken label** — "Next host", "Previous host", "Back to start" — or
+  VoiceOver reads an unlabelled button.
+
 Core's order puts degraded hosts first, so "the first hosts" in a large fleet are the ones worth a
 glance, with no second sort in the widget. The thresholds are how many rows fit at the default text
 size; they are one pure function (`WidgetDensity`) with tests, not numbers scattered across views.
@@ -138,6 +152,7 @@ Only stage 5 needs the portal.
 
 ## Out of scope
 
-- Live Activities and interactive widgets (buttons inside a widget).
+- Live Activities.
+- Buttons that change anything on a host or in the configuration. The only interaction is paging.
 - A macOS widget. The menu bar already is one.
 - Alerts pushed to the widget. A widget refreshes on WidgetKit's budget, not on events.
