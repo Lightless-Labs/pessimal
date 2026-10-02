@@ -663,7 +663,45 @@ func settingsToolbarSmoke() throws {
     try check(macLike.lastPersistenceError == nil, "no mirror means nothing to fail")
 }
 
+// How much a home screen widget shows, and which page it is on (M11). The thresholds are the
+// owner's rule — a fleet of two in full, a fleet of thirty as a summary and the hosts needing
+// attention — and they live in one function, so they are pinned here rather than in the views.
+func widgetLayoutSmoke() throws {
+    try check(WidgetDensity.choose(size: .square, hostCount: 0) == .summary,
+              "no hosts is a summary that says so, not an empty frame")
+    for size in WidgetSize.allCases {
+        try check(WidgetDensity.choose(size: size, hostCount: 1) == .singleHost,
+                  "a fleet of one shows that host, whatever the size")
+    }
+    try check(WidgetDensity.choose(size: .square, hostCount: 3) == .rows(limit: 4),
+              "a small fleet gets a row per host in the square")
+    try check(WidgetDensity.choose(size: .square, hostCount: 5) == .summary,
+              "past four hosts the square is a summary")
+    try check(WidgetDensity.choose(size: .wide, hostCount: 12) == .summaryAndRows(limit: 3),
+              "a large fleet in the wide widget is the summary and the first hosts")
+    try check(WidgetDensity.choose(size: .large, hostCount: 8) == .rows(limit: 8),
+              "the large widget lists up to eight hosts in full")
+    try check(WidgetDensity.choose(size: .large, hostCount: 9) == .summaryAndRows(limit: 6),
+              "and switches to a summary past that")
+
+    try check(WidgetPaging.pages(size: .square, hostCount: 3) == 4,
+              "the square pages: a start page and one per host")
+    try check(WidgetPaging.pages(size: .large, hostCount: 3) == 1,
+              "the large widget never pages: it has room for the list")
+    try check(WidgetPaging.pages(size: .wide, hostCount: 1) == 1,
+              "one host needs no paging")
+    try check(WidgetPaging.page(at: 0, size: .wide, hostCount: 3) == .start, "page zero is the start")
+    try check(WidgetPaging.page(at: 2, size: .wide, hostCount: 3) == .host(index: 1),
+              "page n is the host at n-1, in core's order")
+    try check(WidgetPaging.page(at: 9, size: .wide, hostCount: 3) == .host(index: 2),
+              "a saved index past a fleet that shrank shows the last host, not nothing")
+    try check(WidgetPaging.next(after: 3, size: .square, hostCount: 3) == 3,
+              "forward stops at the last host rather than wrapping")
+    try check(WidgetPaging.previous(before: 0) == 0, "back stops at the start")
+}
+
 do {
+    try widgetLayoutSmoke()
     try MainActor.assumeIsolated { try syncSmoke() }
     try MainActor.assumeIsolated { try sharedConnectionSmoke() }
     try loginItemSmoke()

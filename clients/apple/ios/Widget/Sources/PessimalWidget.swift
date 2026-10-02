@@ -23,6 +23,9 @@ import WidgetKit
 @main
 struct PessimalWidgetBundle: WidgetBundle {
     var body: some Widget {
+        FleetWidget()
+        // Kept until its number is in: it is the only way the 30 MB question gets answered from a
+        // phone. Removed once the plan's stage 0 is recorded as done.
         MemoryProbeWidget()
     }
 }

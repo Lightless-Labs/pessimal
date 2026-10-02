@@ -1,7 +1,8 @@
 # M11: iOS widgets, home and lock screen
 
 **Created:** 2026-10-02
-**Status:** planned. Stage 0 (the memory spike) gates the design; stage 5 waits for owner steps.
+**Status:** stages 0–4 built, 2026-10-02; the extension's App ID and profile exist. Waiting on
+the memory number from a TestFlight build, which decides whether the widget keeps polling itself.
 
 ## Goal
 

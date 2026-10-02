@@ -20,6 +20,13 @@ swift_library(
 swift_library(
     name = "PessimalWidgetLib",
     srcs = glob(["Widget/Sources/**/*.swift"]),
+    # Declared, not just imported: rules_apple's App Intents aspect looks for the framework among the
+    # library's link flags, and refuses the extension's `app_intents` without it. An `import` alone
+    # autolinks it but leaves no trace that aspect can read.
+    linkopts = [
+        "-framework",
+        "AppIntents",
+    ],
     module_name = "PessimalWidget",
     tags = ["manual"],
     deps = [
@@ -159,6 +166,10 @@ ios_extension(
         # No local Xcode profile for the extension: nobody builds this for a device by hand.
         "//conditions:default": None,
     }),
+    # The widget's configuration and its paging buttons are App Intents. Their metadata is extracted
+    # at build time — Xcode does it on its own, Bazel only when told — and without it the widget's
+    # edit sheet has nothing in it and the buttons do nothing.
+    app_intents = [":PessimalWidgetLib"],
     # The app's own version target. App Store validation refuses an extension whose versions
     # differ from its app's.
     version = ":app_version",
