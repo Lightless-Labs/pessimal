@@ -15,19 +15,21 @@ of what a fleet monitor is for on a phone.
 |---|---|---|
 | `systemSmall` | Home, square | Fleet: worst severity, hosts and alive. One host: its liveness and one metric. |
 | `systemMedium` | Home, wide | Fleet: the first few hosts in core's order, each with its liveness and the chosen metric. One host: three metrics. |
+| `systemLarge` | Home, large square | Fleet: up to eight hosts with liveness and two metrics each. One host: every overview metric. |
 
-Two home sizes, by the owner's call (2026-10-02): a square and a wide rectangle, with more
-information in the wide one. No `systemLarge`.
+Three home sizes, by the owner's call (2026-10-02): a square, a wide rectangle and a large square,
+with more information in each.
 
 **Density follows the fleet size** (also the owner's call). A fleet widget with two hosts has room to
 show both in full; one with thirty has room for a summary and the hosts that need attention. So the
 layout is chosen from the number of hosts:
 
-| Hosts | Square | Wide |
-|---|---|---|
-| 1 | The host: liveness, and the chosen metric large | The host: liveness and three metrics |
-| 2 – 4 | One row per host: liveness and name | One row per host: liveness, name, the chosen metric |
-| 5 or more | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other |
+| Hosts | Square | Wide | Large |
+|---|---|---|---|
+| 1 | The host: liveness, and the chosen metric large | The host: liveness and three metrics | The host: liveness and every overview metric |
+| 2 – 4 | One row per host: liveness and name | One row per host: liveness, name, the chosen metric | One row per host: liveness, name, two metrics |
+| 5 – 8 | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other | One row per host, as above |
+| 9 or more | The summary | The summary and the first hosts | The summary on top, then the first hosts in core's order |
 
 Core's order puts degraded hosts first, so "the first hosts" in a large fleet are the ones worth a
 glance, with no second sort in the widget. The thresholds are how many rows fit at the default text
