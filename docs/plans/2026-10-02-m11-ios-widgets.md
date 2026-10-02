@@ -13,9 +13,26 @@ of what a fleet monitor is for on a phone.
 
 | Family | Where | Content |
 |---|---|---|
-| `systemSmall` | Home | Fleet: worst severity, hosts and alive. One host: its liveness and one metric. |
-| `systemMedium` | Home | Fleet: the first few hosts in core's order, each with its liveness. One host: three metrics. |
-| `systemLarge` | Home | Fleet: up to eight hosts with liveness and one metric each. |
+| `systemSmall` | Home, square | Fleet: worst severity, hosts and alive. One host: its liveness and one metric. |
+| `systemMedium` | Home, wide | Fleet: the first few hosts in core's order, each with its liveness and the chosen metric. One host: three metrics. |
+
+Two home sizes, by the owner's call (2026-10-02): a square and a wide rectangle, with more
+information in the wide one. No `systemLarge`.
+
+**Density follows the fleet size** (also the owner's call). A fleet widget with two hosts has room to
+show both in full; one with thirty has room for a summary and the hosts that need attention. So the
+layout is chosen from the number of hosts:
+
+| Hosts | Square | Wide |
+|---|---|---|
+| 1 | The host: liveness, and the chosen metric large | The host: liveness and three metrics |
+| 2 – 4 | One row per host: liveness and name | One row per host: liveness, name, the chosen metric |
+| 5 or more | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other |
+
+Core's order puts degraded hosts first, so "the first hosts" in a large fleet are the ones worth a
+glance, with no second sort in the widget. The thresholds are how many rows fit at the default text
+size; they are one pure function (`WidgetDensity`) with tests, not numbers scattered across views.
+A widget configured for one host ignores all of this and shows that host.
 | `accessoryInline` | Lock screen | "3/3 alive", or one host's liveness and one value. |
 | `accessoryCircular` | Lock screen | A gauge: alive over total, or one host's metric as a ratio. |
 | `accessoryRectangular` | Lock screen | One host or the fleet, in three short lines. |
@@ -49,9 +66,10 @@ Why the keychain and not an App Group:
 - The key is a secret and already lives in the keychain. Moving the address and environment beside
   it keeps one store, not two.
 
-The app's existing item (service `com.lightless-labs.pessimal.macos`, no access group, so in the
-app's private group) is migrated once into the shared group on launch, and the old item deleted
-after the copy is read back.
+The app keeps its own stores exactly as they are, and **mirrors** the connection into the shared
+item whenever it changes and on launch. A mirror, not a migration: nothing is deleted, the app's
+source of truth does not move, and a widget that cannot read the shared item fails on its own
+without taking the app's key with it.
 
 ## The risk that gates the design: 30 MB
 
@@ -79,12 +97,16 @@ The simulator does not enforce the limit, so its number is a floor, not an answe
 | Keychain group | allowed by every existing profile | nobody |
 | App Group | not needed unless stage 0 fails | — |
 
-Two cautions already in CLAUDE.md apply directly:
+What an entitlements file does under rules_apple 4.3.3, read from its source
+(`tools/plisttool/plisttool.py`, `update_plist`): it copies **only** `application-identifier` and
+`get-task-allow` in from the profile when the file leaves them out. Nothing else is copied. So:
 
-- **An entitlements file replaces the set rules_apple takes from the profile.** Adding
-  `keychain-access-groups` to the app means the app gains its first entitlements file, and every key
-  the app needs must then be in it. M9 stage 5 (the iCloud key-value store) adds a key to the same
-  file. The two must be designed together, keyed exactly like `provisioning_profile`.
+- The app keeps its application identifier with or without listing it.
+- The profile's `keychain-access-groups = PKPPLFK854.*` is **not** copied, so the file must list the
+  shared group by name — and once it does, that group becomes the app's *default* access group for
+  keychain items written without one. Every write here names its group explicitly for that reason.
+- M9 stage 5 (the iCloud key-value store) adds a key to the same file. The two are one file, keyed
+  exactly like `provisioning_profile`.
 - The extension's profile name must match in three places, as the app's does: the portal, the
   `local_provisioning_profile` target, and `scripts/release-ios-testflight-buildkite.sh`.
 

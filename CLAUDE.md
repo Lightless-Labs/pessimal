@@ -113,10 +113,11 @@ yet — do not add build instructions for them to the docs before they work.
 - **A new top-level key or entry key in the settings sync document requires a format bump.** So does
   removing a known key or making one optional. A new synced setting does not: it is a new register
   name inside `settings`.
-- Once the iOS app has an entitlements file (M9 stage 5): its `entitlements` select must stay keyed
-  exactly like `provisioning_profile` (`beta_build`, `release_build`, `ci_build`, default). A custom
-  entitlements file replaces the set rules_apple takes from the profile, so every key the app needs
-  must be in the file.
+- Once the iOS app has an entitlements file (M9 stage 5, M11): its `entitlements` select must stay
+  keyed exactly like `provisioning_profile` (`beta_build`, `release_build`, `ci_build`, default).
+  rules_apple 4.3.3 copies only `application-identifier` and `get-task-allow` in from the profile
+  (`plisttool.py`, `update_plist`); every other key the app needs — `keychain-access-groups`
+  included, whatever the profile allows — must be listed in the file.
 - Once the Mac app embeds a Developer ID profile (M9 stage 6): regenerate and recommit it whenever the
   Developer ID Application certificate changes. A profile that does not list the signing certificate
   stops the app from launching.
