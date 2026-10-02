@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>PessimalWidget</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pessimal</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.lightless-labs.pessimal.ios.widget</string>
+	<key>CFBundleExecutable</key>
+	<string>PessimalWidgetExtension</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<!-- The same reason as the app's: HTTPS only, which is exempt, and without the key App Store
+	     Connect asks about export compliance on every upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Overwritten by the build from the same version target as the app. App Store validation
+	     refuses an extension whose versions differ from its app's. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.widgetkit-extension</string>
+	</dict>
+</dict>
+</plist>

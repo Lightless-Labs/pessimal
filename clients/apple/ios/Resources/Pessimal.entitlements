@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The keychain group the app mirrors its connection into and the widget reads it from
+	     (PessimalKit, SharedConnection.swift). Team-prefixed, which every explicit App ID's profile
+	     already allows as PKPPLFK854.*, so it needs no capability in the portal.
+
+	     The team ID is written out rather than as $(AppIdentifierPrefix): the simulator build signs
+	     with no profile, and there is nothing for that variable to expand from.
+
+	     rules_apple 4.3.3 copies only application-identifier and get-task-allow in from the profile;
+	     every other entitlement this target needs must be listed here. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>PKPPLFK854.com.lightless-labs.pessimal.shared</string>
+	</array>
+</dict>
+</plist>

@@ -145,6 +145,9 @@ done
 
 APP_TARGET="//clients/apple/ios:Pessimal"
 PROFILE_NAME="com.lightless-labs.pessimal.ios"
+# The widget extension's own profile (M11). An extension is signed separately, under its own App ID,
+# and the names must agree with clients/apple/ios/BUILD.bazel and the portal, as the app's do.
+WIDGET_PROFILE_NAME="com.lightless-labs.pessimal.ios.widget"
 IPA=".bazel/bin/clients/apple/ios/Pessimal.ipa"
 
 # ---------------------------------------------------------------------------------------------------
@@ -179,21 +182,29 @@ trap 'cleanup; exit 143' TERM
 # The provisioning profile. asc.py installs it through the App Store Connect API. If the name is wrong,
 # it lists every profile the key can see.
 # ---------------------------------------------------------------------------------------------------
-echo "--- fetching the distribution profile from App Store Connect"
+echo "--- fetching the distribution profiles from App Store Connect"
 scripts/asc.py install-profile --name "$PROFILE_NAME"
+scripts/asc.py install-profile --name "$WIDGET_PROFILE_NAME"
 
 # Bazel matches a profile by the Name inside it, not by its filename, so look it up the same way.
-profile_path=""
-for candidate in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
-  [[ -f "$candidate" ]] || continue
-  name="$(security cms -D -i "$candidate" 2>/dev/null | plutil -extract Name raw -o - - 2>/dev/null || true)"
-  if [[ "$name" == "$PROFILE_NAME" ]]; then
-    profile_path="$candidate"
-    break
-  fi
-done
-[[ -n "$profile_path" ]] || fail "no installed provisioning profile is named $PROFILE_NAME"
+installed_profile_named() {
+  local wanted="$1" candidate name
+  for candidate in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
+    [[ -f "$candidate" ]] || continue
+    name="$(security cms -D -i "$candidate" 2>/dev/null | plutil -extract Name raw -o - - 2>/dev/null || true)"
+    if [[ "$name" == "$wanted" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+profile_path="$(installed_profile_named "$PROFILE_NAME")" \
+  || fail "no installed provisioning profile is named $PROFILE_NAME"
+widget_profile_path="$(installed_profile_named "$WIDGET_PROFILE_NAME")" \
+  || fail "no installed provisioning profile is named $WIDGET_PROFILE_NAME; create it in the portal under that exact name (docs/plans/2026-10-02-m11-ios-widgets.md)"
 echo "using the profile at $profile_path"
+echo "using the widget profile at $widget_profile_path"
 
 # ---------------------------------------------------------------------------------------------------
 # A temporary keychain, never the login keychain. codesign searches the user's keychain list, so the
@@ -249,6 +260,10 @@ unset APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64 APPLE_DISTRIBUTION_CERTIFICATE_P
 # different causes. This check names the cause in seconds.
 scripts/signing-diagnostics.py "$profile_path" "$KEYCHAIN" \
   || fail "no signing identity in this keychain matches $(basename "$profile_path"); see above"
+# The widget is signed with the same certificate, under its own profile; a profile created against a
+# different certificate fails here rather than after the whole build.
+scripts/signing-diagnostics.py "$widget_profile_path" "$KEYCHAIN" \
+  || fail "no signing identity in this keychain matches the widget profile $(basename "$widget_profile_path"); see above"
 
 # ---------------------------------------------------------------------------------------------------
 # Build.

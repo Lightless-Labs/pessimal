@@ -42,7 +42,12 @@ final class PessimalServices {
 
     /// - Parameter platform: `.live` in the app; `PlatformStores.inMemory(...)` in a preview, which is
     ///   what keeps a preview from reading — or overwriting — a real API key.
-    init(platform: PlatformStores = .live) {
+    ///   - sharedConnection: where the connection is mirrored for the widget. The keychain in the
+    ///     app; `nil` in a preview, so a preview never writes the item the real widget reads.
+    init(
+        platform: PlatformStores = .live,
+        sharedConnection: (any SharedConnectionStore)? = KeychainSharedConnectionStore()
+    ) {
         let bridge = FleetStoreBridge(stores: platform)
         stores = bridge
         let fleet = FleetModel(
@@ -52,6 +57,7 @@ final class PessimalServices {
             // values `SettingsStore.removeAll()` clears — "reset connection" must not revoke an
             // opt-out. See `UsageConsentStore`.
             usageConsent: platform.usageConsent,
+            sharedConnection: sharedConnection,
             // The model's own wake handling is an `NSWorkspace` notification, which does not exist
             // here — what it stands in for on iOS is the scene becoming active, and only the app
             // layer sees that. Said explicitly rather than left to the `#if` inside the model:

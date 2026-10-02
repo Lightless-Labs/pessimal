@@ -631,8 +631,41 @@ func settingsToolbarSmoke() throws {
               "and so does a screen nothing has been typed into yet")
 }
 
+// The widget polls with what the app mirrors into the shared keychain item (M11). The mirror is
+// written when the model adopts a session — launch, Save, a synced change — and nowhere else, so
+// that is what is driven: a real model, real stores in memory, and the session it builds.
+@MainActor func sharedConnectionSmoke() throws {
+    let platform = PlatformStores.inMemory(
+        apiKey: InMemoryAPIKeyStore(apiKey: "smoke-key"),
+        settings: InMemorySettingsStore(backendBaseURL: "http://127.0.0.1:9", environment: "smoke")
+    )
+    let bridge = FleetStoreBridge(stores: platform)
+    let mirror = InMemorySharedConnectionStore()
+    let model = FleetModel(
+        settings: bridge,
+        stateCache: bridge,
+        sharedConnection: mirror,
+        observesSystemWake: false
+    )
+
+    try check(try mirror.read() == nil, "nothing is mirrored before a session exists")
+    model.reloadSettings()
+    try check(
+        try mirror.read() == SharedConnection(
+            baseURL: "http://127.0.0.1:9", apiKey: "smoke-key", environment: "smoke"
+        ),
+        "adopting a session mirrors the connection and the environment for the widget"
+    )
+
+    // A model with no mirror — the Mac app, which has no widget — adopts the same session quietly.
+    let macLike = FleetModel(settings: bridge, stateCache: bridge, observesSystemWake: false)
+    macLike.reloadSettings()
+    try check(macLike.lastPersistenceError == nil, "no mirror means nothing to fail")
+}
+
 do {
     try MainActor.assumeIsolated { try syncSmoke() }
+    try MainActor.assumeIsolated { try sharedConnectionSmoke() }
     try loginItemSmoke()
     try fleetTallySmoke()
     try appVersionSmoke()

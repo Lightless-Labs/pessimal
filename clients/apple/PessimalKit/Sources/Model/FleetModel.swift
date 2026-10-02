@@ -162,6 +162,13 @@ public final class FleetModel {
     /// because a sink only exists when consent allowed it to.
     @ObservationIgnored private let usageConsent: any UsageConsentStore
 
+    /// Where the connection is mirrored for the iOS widget, or `nil` where there is no widget.
+    ///
+    /// Written whenever a session is adopted, which is every moment the app's connection or
+    /// environment becomes the one in force: launch, Save, and a settings change arriving from
+    /// another device. Nothing is read back from it; see ``KeychainSharedConnectionStore``.
+    @ObservationIgnored private let sharedConnection: (any SharedConnectionStore)?
+
     @ObservationIgnored private var session: FleetSession?
 
     /// The connection the live session was built from. Held so a config change can rebuild the
@@ -211,6 +218,7 @@ public final class FleetModel {
         // A call site that forgets to pass this reports nothing; the failure mode of the alternative
         // is reporting from a preview, a test, or a host that never consented. Fail closed.
         usageConsent: any UsageConsentStore = InMemoryUsageConsentStore(optedOut: true),
+        sharedConnection: (any SharedConnectionStore)? = nil,
         jitterFraction: Double = FleetModel.defaultJitterFraction,
         observesSystemWake: Bool = true,
         clock: @escaping () -> Date = { Date() }
@@ -218,6 +226,7 @@ public final class FleetModel {
         self.settings = settings
         self.stateCache = stateCache
         self.usageConsent = usageConsent
+        self.sharedConnection = sharedConnection
         self.jitterFraction = jitterFraction
         self.observesSystemWake = observesSystemWake
         self.clock = clock
@@ -824,6 +833,27 @@ public final class FleetModel {
         sessionState = .ready
         pollingState = .idle
         lastTransitions = []
+        mirrorConnection(connection, environment: config.environment)
+    }
+
+    /// Hands the widget the connection now in force.
+    ///
+    /// Best effort, and recorded rather than thrown: a widget that cannot read the mirror shows that
+    /// it has no connection, which is its own failure to report. Failing here would mean a keychain
+    /// problem that only the widget cares about took down the app's own adoption of a session.
+    private func mirrorConnection(_ connection: FleetConnection, environment: String) {
+        guard let sharedConnection else { return }
+        do {
+            try sharedConnection.write(
+                SharedConnection(
+                    baseURL: connection.baseURL,
+                    apiKey: connection.apiKey,
+                    environment: environment
+                )
+            )
+        } catch {
+            lastPersistenceError = Self.message(for: error)
+        }
     }
 
     private func exportedState() -> String? {

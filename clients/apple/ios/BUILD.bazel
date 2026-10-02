@@ -1,5 +1,5 @@
 load("@rules_apple//apple:apple.bzl", "local_provisioning_profile")
-load("@rules_apple//apple:ios.bzl", "ios_application")
+load("@rules_apple//apple:ios.bzl", "ios_application", "ios_extension")
 load("@rules_apple//apple:versioning.bzl", "apple_bundle_version")
 load("@rules_swift//swift:swift.bzl", "swift_library")
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcode_provisioning_profile")
@@ -8,6 +8,19 @@ swift_library(
     name = "PessimalIOSLib",
     srcs = glob(["Sources/**/*.swift"]),
     module_name = "PessimalIOS",
+    tags = ["manual"],
+    deps = [
+        "//clients/apple/PessimalFFI",
+        "//clients/apple/PessimalKit",
+    ],
+)
+
+# The widget extension's code (M11). Its own module: an extension is a separate process with a
+# 30 MB limit, and linking the app's views into it would spend that on code it never runs.
+swift_library(
+    name = "PessimalWidgetLib",
+    srcs = glob(["Widget/Sources/**/*.swift"]),
+    module_name = "PessimalWidget",
     tags = ["manual"],
     deps = [
         "//clients/apple/PessimalFFI",
@@ -55,6 +68,17 @@ xcode_provisioning_profile(
 local_provisioning_profile(
     name = "distribution_profile",
     profile_name = "com.lightless-labs.pessimal.ios",
+    tags = ["manual"],
+    team_id = "PKPPLFK854",
+)
+
+# The widget extension's own App Store profile. An extension is signed separately from its app, with
+# its own App ID (com.lightless-labs.pessimal.ios.widget). The same three places must agree on the
+# name as for the app's: the portal, profile_name here, and WIDGET_PROFILE_NAME in
+# scripts/release-ios-testflight-buildkite.sh.
+local_provisioning_profile(
+    name = "widget_distribution_profile",
+    profile_name = "com.lightless-labs.pessimal.ios.widget",
     tags = ["manual"],
     team_id = "PKPPLFK854",
 )
@@ -113,6 +137,34 @@ genrule(
 PLISTEOF""",
 )
 
+# The home and lock screen widgets (M11). See docs/plans/2026-10-02-m11-ios-widgets.md.
+ios_extension(
+    name = "PessimalWidgetExtension",
+    bundle_id = "com.lightless-labs.pessimal.ios.widget",
+    # Keyed exactly like the app's, per the CLAUDE.md caution: every branch gets the file, the
+    # simulator included, because the widget reads the shared keychain item in the simulator too.
+    entitlements = select({
+        "//:beta_build": "Widget/PessimalWidget.entitlements",
+        "//:release_build": "Widget/PessimalWidget.entitlements",
+        "//:ci_build": "Widget/PessimalWidget.entitlements",
+        "//conditions:default": "Widget/PessimalWidget.entitlements",
+    }),
+    families = ["iphone", "ipad"],
+    infoplists = ["Widget/Info.plist"],
+    minimum_os_version = "17.0",
+    provisioning_profile = select({
+        "//:beta_build": ":widget_distribution_profile",
+        "//:release_build": ":widget_distribution_profile",
+        "//:ci_build": None,
+        # No local Xcode profile for the extension: nobody builds this for a device by hand.
+        "//conditions:default": None,
+    }),
+    # The app's own version target. App Store validation refuses an extension whose versions
+    # differ from its app's.
+    version = ":app_version",
+    deps = [":PessimalWidgetLib"],
+)
+
 ios_application(
     name = "Pessimal",
     bundle_id = "com.lightless-labs.pessimal.ios",
@@ -120,6 +172,15 @@ ios_application(
     # App Store validation names exact sizes -- 120 for iPhone, 152 for iPad -- and a bundle with no
     # icon is rejected after the upload, which is the slowest possible place to learn it.
     app_icons = glob(["Resources/AppIcon.xcassets/**"]),
+    # The app's first entitlements file, for the keychain group it mirrors its connection into for
+    # the widget. Keyed like provisioning_profile; M9 stage 5 adds the iCloud key-value store here.
+    entitlements = select({
+        "//:beta_build": "Resources/Pessimal.entitlements",
+        "//:release_build": "Resources/Pessimal.entitlements",
+        "//:ci_build": "Resources/Pessimal.entitlements",
+        "//conditions:default": "Resources/Pessimal.entitlements",
+    }),
+    extensions = [":PessimalWidgetExtension"],
     families = ["iphone", "ipad"],
     infoplists = [
         "Resources/Info.plist",

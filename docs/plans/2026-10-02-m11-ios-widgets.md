@@ -61,6 +61,31 @@ sensor.
 The rules from the apps carry over unchanged: the tallies show only what is not zero
 (`FleetTally`), a host's severity is core's, and absence renders as absence.
 
+## When there is nothing new to show
+
+The app's rule carries over, because it is the right one: **a failed poll does not erase what the
+last good one showed.** The app keeps its values on screen and qualifies them — an orange banner,
+"Data is stale", with the age and core's own sentence for what failed, then a red "Not showing live
+data" once the data is past the freshness budget. The widget does the same, and for the same
+reason: the age of a value is information, and an error that replaces it throws that away.
+
+So the widget persists core's exported state in its own container after every poll and restores it
+into the next session, exactly as the app restores its cache. Core then computes the verdict —
+`Fresh`, `Idle`, `Degraded`, `Unusable`, `Unattempted` — and the widget renders it, with no second
+copy of the freshness rules in Swift. The same saved state is what paging renders from.
+
+| State | Widget shows |
+|---|---|
+| Not set up: no shared connection | "Open Pessimal to connect", and a tap opens the app |
+| Added, nothing polled yet (`Unattempted`) | The layout redacted, no error |
+| Polling fine (`Fresh`) | The layout |
+| Polls failing, recent data (`Degraded`) | The last values, the time they are from, and a warning mark |
+| Polls failing, old or no data (`Unusable`) | The last values dimmed with their age, or "Can't reach your backend" if there never were any |
+| Key rejected (core's unauthorised failure) | "Your key was refused — open Pessimal", and a tap opens Settings |
+
+No network, a backend that is down and a DNS failure are all the same state to the widget: core
+reports them as an unreachable failure, and the widget shows the age of what it last saw.
+
 ## Where the data comes from
 
 **The widget polls the backend itself**, through the same Rust core the app uses, in its
