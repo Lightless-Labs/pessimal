@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.9.0 - 2026-10-02
+#### Features
+- (**ios**) the fleet widget, for the home and lock screens - (e1d57c1) - El-Fitz, *Claude Opus 5.5*
+- (**ios**) add the widget extension, first as a memory probe - (eb1021a) - El-Fitz, *Claude Opus 5.5*
+#### Documentation
+- (**m11**) page through hosts in the square and wide widgets - (f3100c7) - El-Fitz, *Claude Opus 5.5*
+- (**m11**) keep the large home widget too - (5501f83) - El-Fitz, *Claude Opus 5.5*
+- (**m11**) two home sizes, density by fleet size, and what rules_apple copies - (0b7ac81) - El-Fitz, *Claude Opus 5.5*
+- plan M11, iOS widgets for the home and lock screens - (da96f06) - El-Fitz, *Claude Opus 5.5*
+
+- - -
+
 ## v0.8.0 - 2026-09-20
 #### Features
 - (**apps**) offer Test, then Save, in the iOS settings toolbar - (2ba4a61) - El-Fitz, *Claude Opus 5 (1M context)*
