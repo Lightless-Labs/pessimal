@@ -170,6 +170,9 @@ ios_extension(
     # at build time — Xcode does it on its own, Bazel only when told — and without it the widget's
     # edit sheet has nothing in it and the buttons do nothing.
     app_intents = [":PessimalWidgetLib"],
+    # Its own privacy manifest, at the bundle root where Apple looks, through `resources` for the
+    # same reason the app's is: this rules_apple has no dedicated attribute.
+    resources = ["Widget/PrivacyInfo.xcprivacy"],
     # The app's own version target. App Store validation refuses an extension whose versions
     # differ from its app's.
     version = ":app_version",

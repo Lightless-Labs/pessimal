@@ -22,6 +22,13 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>0.1.0</string>
+	<!-- Required of every 64-bit binary in an upload, extensions included. Without it App Store
+	     Connect refuses the whole build after it has been signed and uploaded (validation error
+	     -19241, measured on Buildkite builds #92-#94). Matches the app's own value. -->
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The widget extension's privacy manifest. Every bundle that calls a required-reason API needs its
+  own; the app's covers the app, not what is embedded in it.
+
+  * NSPrivacyTracking is false and nothing is collected: the widget polls the owner's own backend
+    and builds its session with usage reporting opted out, so it sends nothing to Lightless Labs.
+  * UserDefaults is used only for the widget's own state — the last poll it saved and the page each
+    widget is on — which is reason CA92.1, the same reason the app gives.
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
