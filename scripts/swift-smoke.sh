@@ -677,6 +677,10 @@ func widgetLayoutSmoke() throws {
               "a small fleet gets a row per host in the square")
     try check(WidgetDensity.choose(size: .square, hostCount: 5) == .summary,
               "past four hosts the square is a summary")
+    try check(WidgetDensity.choose(size: .wide, hostCount: 3) == .columns,
+              "a small fleet in the wide widget is a column per host, not rows across the top")
+    try check(WidgetDensity.choose(size: .wide, hostCount: 4) == .columns,
+              "four hosts still fit as columns")
     try check(WidgetDensity.choose(size: .wide, hostCount: 12) == .summaryAndRows(limit: 3),
               "a large fleet in the wide widget is the summary and the first hosts")
     try check(WidgetDensity.choose(size: .large, hostCount: 8) == .rows(limit: 8),

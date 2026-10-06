@@ -27,6 +27,12 @@ public enum WidgetDensity: Equatable, Sendable {
     case singleHost
     /// One row per host, up to `limit`.
     case rows(limit: Int)
+    /// One column per host, side by side, each with the chosen metric large and more below it.
+    ///
+    /// The wide widget with two to four hosts. Rows there filled a strip across the top and left the
+    /// rest empty (the owner's screenshot, 2026-10-06): a wide widget is short and wide, so a small
+    /// fleet reads better across it than down it.
+    case columns
     /// The tallies alone.
     case summary
     /// The tallies, then the first `limit` hosts in core's order — which puts degraded hosts first,
@@ -41,7 +47,7 @@ public enum WidgetDensity: Equatable, Sendable {
         case .square:
             return hostCount <= 4 ? .rows(limit: 4) : .summary
         case .wide:
-            return hostCount <= 4 ? .rows(limit: 4) : .summaryAndRows(limit: 3)
+            return hostCount <= 4 ? .columns : .summaryAndRows(limit: 3)
         case .large:
             return hostCount <= 8 ? .rows(limit: 8) : .summaryAndRows(limit: 6)
         }

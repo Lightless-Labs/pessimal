@@ -105,6 +105,8 @@ struct HomeView: View {
             HostDetail(host: hosts[0], metric: entry.metric, size: size)
         case let .rows(limit):
             HostRows(hosts: Array(hosts.prefix(limit)), metric: entry.metric, size: size)
+        case .columns:
+            HostColumns(hosts: hosts, metric: entry.metric)
         case .summary:
             Summary(fleet: fleet)
         case let .summaryAndRows(limit):
@@ -186,6 +188,66 @@ struct MetricCell: View {
             Text(WidgetFormat.value(of: metric, on: host)).font(.headline).lineLimit(1)
             Text(WidgetFormat.name(metric)).font(.caption2).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// A column per host, for the wide widget with two to four hosts.
+///
+/// The chosen metric large, with a bar when it has a whole to measure against, and the next metrics
+/// below it: three hosts or fewer get two more, four get one, because four columns are narrow.
+struct HostColumns: View {
+    let hosts: [HostViewRecord]
+    let metric: WidgetMetric
+
+    private var extraMetrics: Int { hosts.count >= 4 ? 1 : 2 }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(hosts.enumerated()), id: \.element.id) { index, host in
+                if index > 0 {
+                    Divider().padding(.horizontal, 8)
+                }
+                column(host)
+            }
+        }
+    }
+
+    private func column(_ host: HostViewRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                LivenessDot(liveness: host.liveness)
+                Text(WidgetFormat.shortName(of: host))
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(WidgetFormat.value(of: metric, on: host))
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if let ratio = WidgetFormat.ratio(of: metric, on: host) {
+                    ProgressView(value: ratio)
+                        .tint(WidgetFormat.tint(forRatio: ratio))
+                }
+                Text(WidgetFormat.name(metric))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(Array(WidgetFormat.featured(around: metric, count: 1 + extraMetrics).dropFirst()), id: \.self) { shown in
+                HStack(spacing: 4) {
+                    Text(WidgetFormat.shortName(shown)).foregroundStyle(.secondary)
+                    Spacer(minLength: 2)
+                    Text(WidgetFormat.value(of: shown, on: host))
+                }
+                .font(.caption2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .monospacedDigit()
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -466,6 +528,22 @@ enum WidgetFormat {
         default:
             return matching.first
         }
+    }
+
+    /// A host's name without its domain: "bad-blintz-mini-m4-16gb-2024.home" is
+    /// "bad-blintz-mini-m4-16gb-2024". A column is narrow, and the suffix is the same on every host
+    /// of a home or office network, so it says the least. An address is left whole.
+    static func shortName(of host: HostViewRecord) -> String {
+        let id = host.id
+        if id.split(separator: ".").allSatisfy({ Int($0) != nil }) { return id }
+        return id.split(separator: ".", maxSplits: 1).first.map(String.init) ?? id
+    }
+
+    /// Green, then amber past 70%, red past 90%: a bar is read by its colour before its length.
+    static func tint(forRatio ratio: Double) -> Color {
+        if ratio >= 0.9 { return .red }
+        if ratio >= 0.7 { return .orange }
+        return .green
     }
 
     static func name(_ metric: WidgetMetric) -> String {

@@ -28,7 +28,7 @@ layout is chosen from the number of hosts:
 | Hosts | Square | Wide | Large |
 |---|---|---|---|
 | 1 | The host: liveness, and the chosen metric large | The host: liveness and three metrics | The host: liveness and every overview metric |
-| 2 – 4 | One row per host: liveness and name | One row per host: liveness, name, the chosen metric | One row per host: liveness, name, two metrics |
+| 2 – 4 | One row per host: liveness and name | A column per host: the chosen metric large with a bar, and one or two more below | One row per host: liveness, name, two metrics |
 | 5 – 8 | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other | One row per host, as above |
 | 9 or more | The summary | The summary and the first hosts | The summary on top, then the first hosts in core's order |
 
