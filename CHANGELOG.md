@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.10.0 - 2026-10-06
+#### Features
+- (**ios**) a column per host in the wide widget for small fleets - (680c48d) - El-Fitz, *Claude Opus 5.5*
+
+- - -
+
 ## v0.9.1 - 2026-10-04
 #### Bug Fixes
 - (**ios**) declare arm64 and a privacy manifest for the widget extension - (739b57f) - El-Fitz, *Claude Opus 5.5*
