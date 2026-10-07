@@ -105,8 +105,8 @@ struct HomeView: View {
             HostDetail(host: hosts[0], metric: entry.metric, size: size)
         case let .rows(limit):
             HostRows(hosts: Array(hosts.prefix(limit)), metric: entry.metric, size: size)
-        case .columns:
-            HostColumns(hosts: hosts, metric: entry.metric)
+        case .twoLineRows:
+            HostTwoLineRows(hosts: hosts, metric: entry.metric)
         case .summary:
             Summary(fleet: fleet)
         case let .summaryAndRows(limit):
@@ -191,63 +191,86 @@ struct MetricCell: View {
     }
 }
 
-/// A column per host, for the wide widget with two to four hosts.
+/// Two lines per host, for the wide widget with two to four hosts — the owner's design.
 ///
-/// The chosen metric large, with a bar when it has a whole to measure against, and the next metrics
-/// below it: three hosts or fewer get two more, four get one, because four columns are narrow.
-struct HostColumns: View {
+/// First the liveness and the name, then three metrics across the full width, each given an equal
+/// share and aligned to the start of it so the columns line up from host to host. The chosen metric
+/// comes first, then the others in their usual order: CPU, memory, disk by default.
+///
+/// Drawn at the largest of three type sizes that fits. A wide widget's content is 116 to 126 points
+/// tall depending on the iPhone, and four hosts at two lines each need about 123 at caption size, so
+/// a single size would clip the last line on the smaller phones. `ViewThatFits` measures instead of
+/// guessing per device.
+struct HostTwoLineRows: View {
     let hosts: [HostViewRecord]
     let metric: WidgetMetric
 
-    private var extraMetrics: Int { hosts.count >= 4 ? 1 : 2 }
-
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(Array(hosts.enumerated()), id: \.element.id) { index, host in
-                if index > 0 {
-                    Divider().padding(.horizontal, 8)
-                }
-                column(host)
+        ViewThatFits(in: .vertical) {
+            // Three hosts or fewer try the larger type first; four start at the size that fits most
+            // phones, and fall back to the smallest.
+            if hosts.count < 4 {
+                rows(.regular)
             }
+            rows(.compact)
+            rows(.tight)
         }
+        .monospacedDigit()
     }
 
-    private func column(_ host: HostViewRecord) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                LivenessDot(liveness: host.liveness)
-                Text(WidgetFormat.shortName(of: host))
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(WidgetFormat.value(of: metric, on: host))
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                if let ratio = WidgetFormat.ratio(of: metric, on: host) {
-                    ProgressView(value: ratio)
-                        .tint(WidgetFormat.tint(forRatio: ratio))
+    /// The hosts spread over the widget's height rather than stacked at its top: a block of rows with
+    /// an empty band under it is what the owner first pointed at. The style's spacing is the minimum
+    /// gap, so `ViewThatFits` still measures each style at its tightest.
+    private func rows(_ style: Style) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(hosts.enumerated()), id: \.element.id) { index, host in
+                if index > 0 {
+                    Spacer(minLength: style.hostSpacing)
                 }
-                Text(WidgetFormat.name(metric))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            ForEach(Array(WidgetFormat.featured(around: metric, count: 1 + extraMetrics).dropFirst()), id: \.self) { shown in
-                HStack(spacing: 4) {
-                    Text(WidgetFormat.shortName(shown)).foregroundStyle(.secondary)
-                    Spacer(minLength: 2)
-                    Text(WidgetFormat.value(of: shown, on: host))
+                VStack(alignment: .leading, spacing: style.lineSpacing) {
+                    HStack(spacing: 5) {
+                        LivenessDot(liveness: host.liveness, diameter: style.dot)
+                        Text(WidgetFormat.shortName(of: host))
+                            .font(style.name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    HStack(spacing: 0) {
+                        ForEach(WidgetFormat.featured(around: metric, count: 3), id: \.self) { shown in
+                            HStack(spacing: 3) {
+                                Text(WidgetFormat.compactName(shown)).foregroundStyle(.secondary)
+                                Text(WidgetFormat.value(of: shown, on: host))
+                            }
+                            .font(style.values)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
-                .font(.caption2)
+                .accessibilityElement(children: .combine)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .monospacedDigit()
-        .accessibilityElement(children: .combine)
+        // Flexible height, so the spacers between hosts have room to grow. `ViewThatFits` still tests
+        // each style at its ideal height, which is its tightest.
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private struct Style {
+        let name: Font
+        let values: Font
+        let hostSpacing: CGFloat
+        let lineSpacing: CGFloat
+        let dot: CGFloat
+
+        static let regular = Style(
+            name: .subheadline.weight(.semibold), values: .caption, hostSpacing: 7, lineSpacing: 2, dot: 8
+        )
+        static let compact = Style(
+            name: .caption.weight(.semibold), values: .caption2, hostSpacing: 3, lineSpacing: 1, dot: 7
+        )
+        static let tight = Style(
+            name: .caption2.weight(.semibold), values: .caption2, hostSpacing: 1, lineSpacing: 0, dot: 6
+        )
     }
 }
 
@@ -472,11 +495,12 @@ struct FreshnessMark: View {
 
 struct LivenessDot: View {
     let liveness: LivenessRecord
+    var diameter: CGFloat = 6
 
     var body: some View {
         Circle()
             .fill(WidgetFormat.tint(for: liveness))
-            .frame(width: 6, height: 6)
+            .frame(width: diameter, height: diameter)
             .accessibilityLabel(WidgetFormat.livenessName(liveness))
     }
 }
@@ -539,13 +563,6 @@ enum WidgetFormat {
         return id.split(separator: ".", maxSplits: 1).first.map(String.init) ?? id
     }
 
-    /// Green, then amber past 70%, red past 90%: a bar is read by its colour before its length.
-    static func tint(forRatio ratio: Double) -> Color {
-        if ratio >= 0.9 { return .red }
-        if ratio >= 0.7 { return .orange }
-        return .green
-    }
-
     static func name(_ metric: WidgetMetric) -> String {
         switch metric {
         case .cpu: return "CPU"
@@ -553,6 +570,17 @@ enum WidgetFormat {
         case .disk: return "Disk"
         case .load: return "Load"
         case .temperature: return "Temperature"
+        }
+    }
+
+    /// The labels on the second line of a two-line row, as the owner wrote them: "CPU", "MEM", "Disk".
+    static func compactName(_ metric: WidgetMetric) -> String {
+        switch metric {
+        case .cpu: return "CPU"
+        case .memory: return "MEM"
+        case .disk: return "Disk"
+        case .load: return "Load"
+        case .temperature: return "Temp"
         }
     }
 

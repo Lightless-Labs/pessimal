@@ -27,12 +27,12 @@ public enum WidgetDensity: Equatable, Sendable {
     case singleHost
     /// One row per host, up to `limit`.
     case rows(limit: Int)
-    /// One column per host, side by side, each with the chosen metric large and more below it.
+    /// Two lines per host: the liveness and the name, then three metrics across the full width.
     ///
-    /// The wide widget with two to four hosts. Rows there filled a strip across the top and left the
-    /// rest empty (the owner's screenshot, 2026-10-06): a wide widget is short and wide, so a small
-    /// fleet reads better across it than down it.
-    case columns
+    /// The wide widget with two to four hosts, by the owner's design (2026-10-07). Single rows there
+    /// filled a strip across the top and left the rest empty; two lines per host fill it, and show
+    /// every host's numbers at once, so a fleet of four needs no paging.
+    case twoLineRows
     /// The tallies alone.
     case summary
     /// The tallies, then the first `limit` hosts in core's order — which puts degraded hosts first,
@@ -47,7 +47,7 @@ public enum WidgetDensity: Equatable, Sendable {
         case .square:
             return hostCount <= 4 ? .rows(limit: 4) : .summary
         case .wide:
-            return hostCount <= 4 ? .columns : .summaryAndRows(limit: 3)
+            return hostCount <= 4 ? .twoLineRows : .summaryAndRows(limit: 3)
         case .large:
             return hostCount <= 8 ? .rows(limit: 8) : .summaryAndRows(limit: 6)
         }
@@ -64,9 +64,10 @@ public enum WidgetPage: Equatable, Sendable {
 
 /// Back and forth through the hosts of a fleet widget, one page each.
 ///
-/// Only the square and the wide widget page, and only when there is more than one host: the large
-/// one has room for the list, and a fleet of one already shows that host. The pages do not wrap —
-/// back and forth, and a way home, is the whole of the interaction.
+/// A page per host is for when the first page cannot show every host's numbers. The square shows
+/// only names past one host, so it pages from two. The wide widget shows two to four hosts in full,
+/// so it pages from five. The large one has room for the list and never pages. The pages do not wrap
+/// — back and forth, and a way home, is the whole of the interaction.
 public enum WidgetPaging {
     public static func pages(size: WidgetSize, hostCount: Int) -> Int {
         pages(applyTo: size, hostCount: hostCount) ? hostCount + 1 : 1
@@ -90,6 +91,10 @@ public enum WidgetPaging {
     }
 
     private static func pages(applyTo size: WidgetSize, hostCount: Int) -> Bool {
-        size != .large && hostCount > 1
+        switch size {
+        case .square: return hostCount > 1
+        case .wide: return hostCount > 4
+        case .large: return false
+        }
     }
 }

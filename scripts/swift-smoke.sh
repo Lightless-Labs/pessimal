@@ -677,10 +677,10 @@ func widgetLayoutSmoke() throws {
               "a small fleet gets a row per host in the square")
     try check(WidgetDensity.choose(size: .square, hostCount: 5) == .summary,
               "past four hosts the square is a summary")
-    try check(WidgetDensity.choose(size: .wide, hostCount: 3) == .columns,
-              "a small fleet in the wide widget is a column per host, not rows across the top")
-    try check(WidgetDensity.choose(size: .wide, hostCount: 4) == .columns,
-              "four hosts still fit as columns")
+    try check(WidgetDensity.choose(size: .wide, hostCount: 3) == .twoLineRows,
+              "a small fleet in the wide widget is two lines per host")
+    try check(WidgetDensity.choose(size: .wide, hostCount: 4) == .twoLineRows,
+              "four hosts still fit at two lines each")
     try check(WidgetDensity.choose(size: .wide, hostCount: 12) == .summaryAndRows(limit: 3),
               "a large fleet in the wide widget is the summary and the first hosts")
     try check(WidgetDensity.choose(size: .large, hostCount: 8) == .rows(limit: 8),
@@ -694,10 +694,14 @@ func widgetLayoutSmoke() throws {
               "the large widget never pages: it has room for the list")
     try check(WidgetPaging.pages(size: .wide, hostCount: 1) == 1,
               "one host needs no paging")
-    try check(WidgetPaging.page(at: 0, size: .wide, hostCount: 3) == .start, "page zero is the start")
-    try check(WidgetPaging.page(at: 2, size: .wide, hostCount: 3) == .host(index: 1),
+    try check(WidgetPaging.pages(size: .wide, hostCount: 4) == 1,
+              "the wide widget shows four hosts in full, so it does not page")
+    try check(WidgetPaging.pages(size: .wide, hostCount: 5) == 6,
+              "and pages from the fifth host, when the first page becomes a summary")
+    try check(WidgetPaging.page(at: 0, size: .square, hostCount: 3) == .start, "page zero is the start")
+    try check(WidgetPaging.page(at: 2, size: .square, hostCount: 3) == .host(index: 1),
               "page n is the host at n-1, in core's order")
-    try check(WidgetPaging.page(at: 9, size: .wide, hostCount: 3) == .host(index: 2),
+    try check(WidgetPaging.page(at: 9, size: .square, hostCount: 3) == .host(index: 2),
               "a saved index past a fleet that shrank shows the last host, not nothing")
     try check(WidgetPaging.next(after: 3, size: .square, hostCount: 3) == 3,
               "forward stops at the last host rather than wrapping")

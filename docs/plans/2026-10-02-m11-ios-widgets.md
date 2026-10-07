@@ -28,12 +28,13 @@ layout is chosen from the number of hosts:
 | Hosts | Square | Wide | Large |
 |---|---|---|---|
 | 1 | The host: liveness, and the chosen metric large | The host: liveness and three metrics | The host: liveness and every overview metric |
-| 2 – 4 | One row per host: liveness and name | A column per host: the chosen metric large with a bar, and one or two more below | One row per host: liveness, name, two metrics |
+| 2 – 4 | One row per host: liveness and name | Two lines per host: liveness and name, then three metrics across the full width | One row per host: liveness, name, two metrics |
 | 5 – 8 | The summary: worst severity and the tallies `FleetTally` shows | The summary on one side, the first hosts in core's order on the other | One row per host, as above |
 | 9 or more | The summary | The summary and the first hosts | The summary on top, then the first hosts in core's order |
 
-**Paging, in the square and the wide widget** (the owner's call, after Weather Up's widget). With
-more than one host, the first page is the layout above, and buttons step through one page per host —
+**Paging, in the square and the wide widget** (the owner's call, after Weather Up's widget). The
+square pages from two hosts, the wide widget from five — it shows up to four hosts in full on its
+first page — and buttons step through one page per host —
 back, forward, and a "back to start" control (`arrow.uturn.backward`). Interactive widgets are
 iOS 17, which is the app's minimum. The large widget does not page: it has room for the list.
 
