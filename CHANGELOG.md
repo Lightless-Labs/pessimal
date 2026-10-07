@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.11.0 - 2026-10-07
+#### Features
+- (**ios**) two lines per host in the wide widget, and no paging below five - (1914873) - El-Fitz, *Claude Opus 5.5*
+
+- - -
+
 ## v0.10.0 - 2026-10-06
 #### Features
 - (**ios**) a column per host in the wide widget for small fleets - (680c48d) - El-Fitz, *Claude Opus 5.5*
